@@ -65,11 +65,11 @@
 #define IJK_LOG_SILENT      8
 
 #define VLOG(level, TAG, ...)    ((void)vprintf(__VA_ARGS__))
-#define ALOG(level, TAG, ...)    ((void)printf(__VA_ARGS__))
+#define ALOG(level, TAG, ...)    (printf("[%s]",TAG),printf(__VA_ARGS__))
 
 #endif
 
-#define IJK_LOG_TAG "IJKMEDIA_YA"
+#define IJK_LOG_TAG "IJKMEDIA_YA "
 
 #define VLOGV(...)  VLOG(IJK_LOG_VERBOSE,   IJK_LOG_TAG, __VA_ARGS__)
 #define VLOGD(...)  VLOG(IJK_LOG_DEBUG,     IJK_LOG_TAG, __VA_ARGS__)
