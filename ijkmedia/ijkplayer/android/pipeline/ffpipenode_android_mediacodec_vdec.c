@@ -373,6 +373,7 @@ static int configure_codec_l(JNIEnv *env, IJKFF_Pipenode *node, jobject new_surf
     // QUIRK: always recreate MediaCodec for reconfigure
     opaque->quirk_reconfigure_with_new_codec = true;
     /* delaying output makes it possible to correct frame order, hopefully */
+    //OMX.TI.DUCATI1： 这是十年前 TI OMAP 芯片时代的老古董硬件，跟这个项目 README 里写的"支持安卓15"完全不是一个时代的设备了。
     if (0 == strncasecmp(mcc->codec_name, "OMX.TI.DUCATI1.", 15)) {
         /* this is the only acceptable value on Nexus S */
         opaque->n_buf_out = 1;
@@ -555,6 +556,62 @@ static int feed_input_buffer2(JNIEnv *env, IJKFF_Pipenode *node, int64_t timeUs,
                     if (opaque->codecpar->width  != new_avctx->width &&
                         opaque->codecpar->height != new_avctx->height) {
                         ALOGW("AV_PKT_DATA_NEW_EXTRADATA: %d x %d\n", new_avctx->width, new_avctx->height);
+                        avcodec_parameters_from_context(opaque->codecpar, new_avctx);
+                        opaque->aformat_need_recreate = true;
+                        ffpipeline_set_surface_need_reconfigure_l(pipeline, true);
+                    }
+                }
+
+                av_frame_unref(frame);
+                avcodec_free_context(&new_avctx);
+            }
+        }
+
+        if (opaque->ffp->mediacodec_handle_resolution_change &&
+            opaque->codecpar->codec_id == AV_CODEC_ID_HEVC) {
+            uint8_t  *size_data      = NULL;
+            int       size_data_size = 0;
+            AVPacket *avpkt          = &d->pkt_temp;
+            size_data = av_packet_get_side_data(avpkt, AV_PKT_DATA_NEW_EXTRADATA, &size_data_size);
+            // hvcC 固定头部至少 23 字节（比 avcC 大得多），这里只是避免把明显过短的
+            // 垃圾数据传给 avcodec_open2，真正的合法性校验交给 avcodec_open2/avcodec_decode_video2 的返回值判断
+            if (size_data && size_data_size >= 23) {
+                int             got_picture = 0;
+                AVFrame        *frame      = av_frame_alloc();
+                AVDictionary   *codec_opts = NULL;
+                const AVCodec  *codec      = opaque->decoder->avctx->codec;
+                AVCodecContext *new_avctx  = avcodec_alloc_context3(codec);
+                int change_ret = 0;
+
+                if (!new_avctx)
+                    return AVERROR(ENOMEM);
+
+                avcodec_parameters_to_context(new_avctx, opaque->codecpar);
+                av_freep(&new_avctx->extradata);
+                new_avctx->extradata = av_mallocz(size_data_size + AV_INPUT_BUFFER_PADDING_SIZE);
+                if (!new_avctx->extradata) {
+                    avcodec_free_context(&new_avctx);
+                    return AVERROR(ENOMEM);
+                }
+                memcpy(new_avctx->extradata, size_data, size_data_size);
+                new_avctx->extradata_size = size_data_size;
+
+                av_dict_set(&codec_opts, "threads", "1", 0);
+                change_ret = avcodec_open2(new_avctx, codec, &codec_opts);
+                av_dict_free(&codec_opts);
+                if (change_ret < 0) {
+                    avcodec_free_context(&new_avctx);
+                    return change_ret;
+                }
+
+                change_ret = avcodec_decode_video2(new_avctx, frame, &got_picture, avpkt);
+                if (change_ret < 0) {
+                    avcodec_free_context(&new_avctx);
+                    return change_ret;
+                } else {
+                    if (opaque->codecpar->width  != new_avctx->width &&
+                        opaque->codecpar->height != new_avctx->height) {
+                        ALOGW("AV_PKT_DATA_NEW_EXTRADATA(HEVC): %d x %d\n", new_avctx->width, new_avctx->height);
                         avcodec_parameters_from_context(opaque->codecpar, new_avctx);
                         opaque->aformat_need_recreate = true;
                         ffpipeline_set_surface_need_reconfigure_l(pipeline, true);
@@ -802,6 +859,61 @@ static int feed_input_buffer(JNIEnv *env, IJKFF_Pipenode *node, int64_t timeUs, 
                     if (opaque->codecpar->width  != new_avctx->width &&
                         opaque->codecpar->height != new_avctx->height) {
                         ALOGW("AV_PKT_DATA_NEW_EXTRADATA: %d x %d\n", new_avctx->width, new_avctx->height);
+                        avcodec_parameters_from_context(opaque->codecpar, new_avctx);
+                        opaque->aformat_need_recreate = true;
+                        ffpipeline_set_surface_need_reconfigure_l(pipeline, true);
+                    }
+                }
+
+                av_frame_unref(frame);
+                avcodec_free_context(&new_avctx);
+            }
+        }
+
+        if (opaque->ffp->mediacodec_handle_resolution_change &&
+            opaque->codecpar->codec_id == AV_CODEC_ID_HEVC) {
+            uint8_t  *size_data      = NULL;
+            int       size_data_size = 0;
+            AVPacket *avpkt          = &d->pkt_temp;
+            size_data = av_packet_get_side_data(avpkt, AV_PKT_DATA_NEW_EXTRADATA, &size_data_size);
+            // hvcC 固定头部至少 23 字节（比 avcC 大得多），这里只是避免把明显过短的
+            // 垃圾数据传给 avcodec_open2，真正的合法性校验交给 avcodec_open2/avcodec_decode_video2 的返回值判断
+            if (size_data && size_data_size >= 23) {
+                int             got_picture = 0;
+                AVFrame        *frame      = av_frame_alloc();
+                AVDictionary   *codec_opts = NULL;
+                const AVCodec  *codec      = opaque->decoder->avctx->codec;
+                AVCodecContext *new_avctx  = avcodec_alloc_context3(codec);
+                int change_ret = 0;
+                if (!new_avctx)
+                    return AVERROR(ENOMEM);
+
+                avcodec_parameters_to_context(new_avctx, opaque->codecpar);
+                av_freep(&new_avctx->extradata);
+                new_avctx->extradata = av_mallocz(size_data_size + AV_INPUT_BUFFER_PADDING_SIZE);
+                if (!new_avctx->extradata) {
+                    avcodec_free_context(&new_avctx);
+                    return AVERROR(ENOMEM);
+                }
+                memcpy(new_avctx->extradata, size_data, size_data_size);
+                new_avctx->extradata_size = size_data_size;
+
+                av_dict_set(&codec_opts, "threads", "1", 0);
+                change_ret = avcodec_open2(new_avctx, codec, &codec_opts);
+                av_dict_free(&codec_opts);
+                if (change_ret < 0) {
+                    avcodec_free_context(&new_avctx);
+                    return change_ret;
+                }
+
+                change_ret = avcodec_decode_video2(new_avctx, frame, &got_picture, avpkt);
+                if (change_ret < 0) {
+                    avcodec_free_context(&new_avctx);
+                    return change_ret;
+                } else {
+                    if (opaque->codecpar->width  != new_avctx->width &&
+                        opaque->codecpar->height != new_avctx->height) {
+                        ALOGW("AV_PKT_DATA_NEW_EXTRADATA(HEVC): %d x %d\n", new_avctx->width, new_avctx->height);
                         avcodec_parameters_from_context(opaque->codecpar, new_avctx);
                         opaque->aformat_need_recreate = true;
                         ffpipeline_set_surface_need_reconfigure_l(pipeline, true);
@@ -1122,10 +1234,28 @@ static int drain_output_buffer_l(JNIEnv *env, IJKFF_Pipenode *node, int64_t time
             SDL_AMediaFormat_getInt32(opaque->output_aformat, "crop-right",     &crop_right);
             SDL_AMediaFormat_getInt32(opaque->output_aformat, "crop-bottom",    &crop_bottom);
 
-            // TI decoder could crash after reconfigure
-            // ffp_notify_msg3(ffp, FFP_MSG_VIDEO_SIZE_CHANGED, width, height);
-            // opaque->frame_width  = width;
-            // opaque->frame_height = height;
+            // 用 crop 矩形算出真正的显示尺寸；部分解码器不填 crop 字段(读到 <=0)，退化为直接用 width/height。
+            // 只更新 frame_width/frame_height + 通知上层，不触碰 surface_need_reconfigure / MediaCodec 重建，
+            // 避免早年 OMX.TI.DUCATI1.（TI 芯片）reconfigure 崩溃问题——这两件事本来就互相独立。
+            {
+                int real_width  = (crop_right  > crop_left) ? (crop_right  - crop_left  + 1) : width;
+                int real_height = (crop_bottom > crop_top)  ? (crop_bottom - crop_top   + 1) : height;
+                if (real_width > 0 && real_height > 0 &&
+                    (real_width != opaque->codecpar->width || real_height != opaque->codecpar->height)) {
+                    ALOGW("AMEDIACODEC__INFO_OUTPUT_FORMAT_CHANGED: resolution changed %dx%d -> %dx%d\n",
+                          opaque->codecpar->width, opaque->codecpar->height, real_width, real_height);
+                    opaque->codecpar->width  = real_width;
+                    opaque->codecpar->height = real_height;
+                    if (opaque->frame_rotate_degrees == 90 || opaque->frame_rotate_degrees == 270) {
+                        opaque->frame_width  = real_height;
+                        opaque->frame_height = real_width;
+                    } else {
+                        opaque->frame_width  = real_width;
+                        opaque->frame_height = real_height;
+                    }
+                    ffp_notify_msg3(ffp, FFP_MSG_VIDEO_SIZE_CHANGED, real_width, real_height);
+                }
+            }
             ALOGI(
                 "AMEDIACODEC__INFO_OUTPUT_FORMAT_CHANGED\n"
                 "    width-height: (%d x %d)\n"
@@ -1295,10 +1425,28 @@ static int drain_output_buffer2_l(JNIEnv *env, IJKFF_Pipenode *node, int64_t tim
             SDL_AMediaFormat_getInt32(opaque->output_aformat, "crop-right",     &crop_right);
             SDL_AMediaFormat_getInt32(opaque->output_aformat, "crop-bottom",    &crop_bottom);
 
-            // TI decoder could crash after reconfigure
-            // ffp_notify_msg3(ffp, FFP_MSG_VIDEO_SIZE_CHANGED, width, height);
-            // opaque->frame_width  = width;
-            // opaque->frame_height = height;
+            // 用 crop 矩形算出真正的显示尺寸；部分解码器不填 crop 字段(读到 <=0)，退化为直接用 width/height。
+            // 只更新 frame_width/frame_height + 通知上层，不触碰 surface_need_reconfigure / MediaCodec 重建，
+            // 避免早年 OMX.TI.DUCATI1.（TI 芯片）reconfigure 崩溃问题——这两件事本来就互相独立。
+            {
+                int real_width  = (crop_right  > crop_left) ? (crop_right  - crop_left  + 1) : width;
+                int real_height = (crop_bottom > crop_top)  ? (crop_bottom - crop_top   + 1) : height;
+                if (real_width > 0 && real_height > 0 &&
+                    (real_width != opaque->codecpar->width || real_height != opaque->codecpar->height)) {
+                    ALOGW("AMEDIACODEC__INFO_OUTPUT_FORMAT_CHANGED: resolution changed %dx%d -> %dx%d\n",
+                          opaque->codecpar->width, opaque->codecpar->height, real_width, real_height);
+                    opaque->codecpar->width  = real_width;
+                    opaque->codecpar->height = real_height;
+                    if (opaque->frame_rotate_degrees == 90 || opaque->frame_rotate_degrees == 270) {
+                        opaque->frame_width  = real_height;
+                        opaque->frame_height = real_width;
+                    } else {
+                        opaque->frame_width  = real_width;
+                        opaque->frame_height = real_height;
+                    }
+                    ffp_notify_msg3(ffp, FFP_MSG_VIDEO_SIZE_CHANGED, real_width, real_height);
+                }
+            }
             ALOGI(
                 "AMEDIACODEC__INFO_OUTPUT_FORMAT_CHANGED\n"
                 "    width-height: (%d x %d)\n"
