@@ -21,8 +21,6 @@
 #include "ffp_hevc_sps_probe.h"
 #include <stddef.h>
 
-#define FFHEVC_NAL_TYPE_SPS 33
-
 typedef struct {
     const uint8_t *data;
     int            size;     /* bytes */
@@ -246,4 +244,13 @@ int ffhevc_probe_sps_size(const uint8_t *data, int size, size_t nal_size,
         return -1;
 
     return ffhevc_parse_sps_size(sps_nal, sps_size, out_width, out_height);
+}
+
+const uint8_t *ffhevc_find_nal_public(const uint8_t *data, int size, size_t nal_size,
+                                       int want_type, int *out_size)
+{
+    if (!data || size <= 0 || !out_size)
+        return NULL;
+
+    return ffhevc_find_nal(data, size, nal_size, want_type, out_size);
 }

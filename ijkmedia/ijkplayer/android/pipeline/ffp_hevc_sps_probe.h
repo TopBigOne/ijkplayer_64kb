@@ -24,6 +24,11 @@
 #include <stdint.h>
 #include <stddef.h>
 
+/* HEVC nal_unit_type 常量（H.265 Table 7-1） */
+#define FFHEVC_NAL_TYPE_VPS 32
+#define FFHEVC_NAL_TYPE_SPS 33
+#define FFHEVC_NAL_TYPE_PPS 34
+
 /*
  * 在一段"长度前缀"格式（avcC/hvcC sample 格式：nal_size 字节大端长度 + NAL 数据，
  * 循环重复）的 HEVC packet 里查找第一个 SPS NAL（nal_unit_type == 33），并解析出
@@ -42,5 +47,19 @@
  */
 int ffhevc_probe_sps_size(const uint8_t *data, int size, size_t nal_size,
                            int *out_width, int *out_height);
+
+/*
+ * 内部 NAL 扫描器的公开封装：在同一种"长度前缀"格式的 packet 里查找第一个
+ * nal_unit_type == want_type 的 NAL（VPS=32 / SPS=33 / PPS=34 见上面的常量）。
+ *
+ * 返回指向该 NAL 起始位置的指针（含 2 字节 HEVC NAL header，不含长度前缀），
+ * 并把该 NAL 的字节数写进 out_size（指针参数）；
+ * 找不到、或者数据异常/不完整时返回 NULL（此时 out_size 的值未定义，调用方
+ * 必须先判断返回值非 NULL 再使用 out_size）。
+ *
+ * 本函数只按类型定位 NAL，不解析 NAL 的负载内容。
+ */
+const uint8_t *ffhevc_find_nal_public(const uint8_t *data, int size, size_t nal_size,
+                                       int want_type, int *out_size);
 
 #endif

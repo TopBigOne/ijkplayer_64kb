@@ -23,6 +23,18 @@ static const uint8_t SPS_3840x2160[] = {
     0x02, 0x1c, 0x40
 };
 
+/* VPS/PPS fixture：ffhevc_find_nal_public 只按 nal_unit_type 定位 NAL、不解析负载，
+ * 所以这两段只需要 2 字节合法的 HEVC NAL header（type 写在第 1 字节的 bit6..1），
+ * 后面的字节是任意占位数据。
+ *   VPS: type=32 -> (32 << 1) = 0x40
+ *   PPS: type=34 -> (34 << 1) = 0x44 */
+static const uint8_t VPS_STUB[] = {
+    0x40, 0x01, 0x0c, 0x01, 0xff, 0xff
+};
+static const uint8_t PPS_STUB[] = {
+    0x44, 0x01, 0xc1, 0x72, 0xb4, 0x62, 0x40
+};
+
 /* 把一个裸 NAL 包装成 4 字节长度前缀格式，模拟 avcC/hvcC sample 格式的 packet */
 static int wrap_length_prefixed(const uint8_t *nal, int nal_len, uint8_t *out)
 {
@@ -32,6 +44,13 @@ static int wrap_length_prefixed(const uint8_t *nal, int nal_len, uint8_t *out)
     out[3] = (uint8_t)(nal_len & 0xFF);
     memcpy(out + 4, nal, nal_len);
     return 4 + nal_len;
+}
+
+/* 把一个裸 NAL 以 4 字节长度前缀格式追加到 out + offset 处，返回新的 offset，
+ * 用来拼出"一个 packet 里带多个 NAL"的场景 */
+static int append_length_prefixed(const uint8_t *nal, int nal_len, uint8_t *out, int offset)
+{
+    return offset + wrap_length_prefixed(nal, nal_len, out + offset);
 }
 
 static void test_finds_720p(void)
@@ -142,6 +161,111 @@ static void test_resolution_change_854x480_to_1280x720(void)
     printf("test_resolution_change_854x480_to_1280x720: OK (%dx%d -> %dx%d)\n", w1, h1, w2, h2);
 }
 
+static void test_find_nal_public_finds_all_three(void)
+{
+    /* 一个 packet 里同时带 VPS + SPS + PPS（编码器重发完整参数集的典型场景），
+     * 三种类型都必须能被定位到，返回的指针和长度要跟原始 NAL 逐字节一致 */
+    uint8_t pkt[128];
+    int     pkt_size = 0;
+    const uint8_t *vps, *sps, *pps;
+    int     vps_size = 0, sps_size = 0, pps_size = 0;
+
+    pkt_size = append_length_prefixed(VPS_STUB,      sizeof(VPS_STUB),      pkt, pkt_size);
+    pkt_size = append_length_prefixed(SPS_1280x720,  sizeof(SPS_1280x720),  pkt, pkt_size);
+    pkt_size = append_length_prefixed(PPS_STUB,      sizeof(PPS_STUB),      pkt, pkt_size);
+
+    vps = ffhevc_find_nal_public(pkt, pkt_size, 4, FFHEVC_NAL_TYPE_VPS, &vps_size);
+    sps = ffhevc_find_nal_public(pkt, pkt_size, 4, FFHEVC_NAL_TYPE_SPS, &sps_size);
+    pps = ffhevc_find_nal_public(pkt, pkt_size, 4, FFHEVC_NAL_TYPE_PPS, &pps_size);
+
+    assert(vps != NULL);
+    assert(vps_size == (int)sizeof(VPS_STUB));
+    assert(memcmp(vps, VPS_STUB, sizeof(VPS_STUB)) == 0);
+
+    assert(sps != NULL);
+    assert(sps_size == (int)sizeof(SPS_1280x720));
+    assert(memcmp(sps, SPS_1280x720, sizeof(SPS_1280x720)) == 0);
+
+    assert(pps != NULL);
+    assert(pps_size == (int)sizeof(PPS_STUB));
+    assert(memcmp(pps, PPS_STUB, sizeof(PPS_STUB)) == 0);
+
+    /* 返回的 NAL 必须落在 packet 缓冲区内部（不越界） */
+    assert(vps >= pkt && vps + vps_size <= pkt + pkt_size);
+    assert(sps >= pkt && sps + sps_size <= pkt + pkt_size);
+    assert(pps >= pkt && pps + pps_size <= pkt + pkt_size);
+
+    printf("test_find_nal_public_finds_all_three: OK (vps=%d sps=%d pps=%d)\n",
+           vps_size, sps_size, pps_size);
+}
+
+static void test_find_nal_public_missing_type_returns_null(void)
+{
+    /* 只带 SPS 的 packet（编码器只重发 SPS 的常见场景）：SPS 能找到，
+     * VPS/PPS 必须返回 NULL，调用方据此退回"只更新宽高"的安全路径 */
+    uint8_t pkt[64];
+    int     pkt_size = wrap_length_prefixed(SPS_854x480, sizeof(SPS_854x480), pkt);
+    int     out_size = 0;
+
+    assert(ffhevc_find_nal_public(pkt, pkt_size, 4, FFHEVC_NAL_TYPE_SPS, &out_size) != NULL);
+    assert(out_size == (int)sizeof(SPS_854x480));
+    assert(ffhevc_find_nal_public(pkt, pkt_size, 4, FFHEVC_NAL_TYPE_VPS, &out_size) == NULL);
+    assert(ffhevc_find_nal_public(pkt, pkt_size, 4, FFHEVC_NAL_TYPE_PPS, &out_size) == NULL);
+    printf("test_find_nal_public_missing_type_returns_null: OK\n");
+}
+
+static void test_find_nal_public_rejects_bad_args(void)
+{
+    uint8_t pkt[64];
+    int     pkt_size = wrap_length_prefixed(SPS_1280x720, sizeof(SPS_1280x720), pkt);
+    int     out_size = 0;
+
+    assert(ffhevc_find_nal_public(NULL, pkt_size, 4, FFHEVC_NAL_TYPE_SPS, &out_size) == NULL);
+    assert(ffhevc_find_nal_public(pkt, 0, 4, FFHEVC_NAL_TYPE_SPS, &out_size) == NULL);
+    assert(ffhevc_find_nal_public(pkt, -1, 4, FFHEVC_NAL_TYPE_SPS, &out_size) == NULL);
+    assert(ffhevc_find_nal_public(pkt, pkt_size, 4, FFHEVC_NAL_TYPE_SPS, NULL) == NULL);
+    /* nal_size 只可能是 1~4，0（Annex-B 流的情况）和 5 都必须被拒绝 */
+    assert(ffhevc_find_nal_public(pkt, pkt_size, 0, FFHEVC_NAL_TYPE_SPS, &out_size) == NULL);
+    assert(ffhevc_find_nal_public(pkt, pkt_size, 5, FFHEVC_NAL_TYPE_SPS, &out_size) == NULL);
+    printf("test_find_nal_public_rejects_bad_args: OK\n");
+}
+
+static void test_find_nal_public_truncated_returns_null(void)
+{
+    /* 声明了 26 字节但只给了 2 字节，绝不能越界读，必须返回 NULL */
+    uint8_t pkt[8] = {0x00, 0x00, 0x00, 0x1a, 0x42, 0x01};
+    int     out_size = 0;
+
+    assert(ffhevc_find_nal_public(pkt, sizeof(pkt), 4, FFHEVC_NAL_TYPE_SPS, &out_size) == NULL);
+    printf("test_find_nal_public_truncated_returns_null: OK\n");
+}
+
+static void test_find_nal_public_agrees_with_probe(void)
+{
+    /* 从 packet 里定位到的 SPS 单独再喂给 ffhevc_probe_sps_size（包一层长度前缀），
+     * 解析出来的宽高必须跟直接在整个 packet 上探测的结果一致 */
+    uint8_t pkt[128], repacked[64];
+    int     pkt_size = 0, repacked_size = 0;
+    const uint8_t *sps;
+    int     sps_size = 0;
+    int     w1 = 0, h1 = 0, w2 = 0, h2 = 0;
+
+    pkt_size = append_length_prefixed(VPS_STUB,       sizeof(VPS_STUB),       pkt, pkt_size);
+    pkt_size = append_length_prefixed(SPS_3840x2160,  sizeof(SPS_3840x2160),  pkt, pkt_size);
+    pkt_size = append_length_prefixed(PPS_STUB,       sizeof(PPS_STUB),       pkt, pkt_size);
+
+    assert(ffhevc_probe_sps_size(pkt, pkt_size, 4, &w1, &h1) == 0);
+
+    sps = ffhevc_find_nal_public(pkt, pkt_size, 4, FFHEVC_NAL_TYPE_SPS, &sps_size);
+    assert(sps != NULL);
+    repacked_size = wrap_length_prefixed(sps, sps_size, repacked);
+    assert(ffhevc_probe_sps_size(repacked, repacked_size, 4, &w2, &h2) == 0);
+
+    assert(w1 == w2 && h1 == h2);
+    assert(w1 == 3840 && h1 == 2160);
+    printf("test_find_nal_public_agrees_with_probe: OK (%dx%d)\n", w1, h1);
+}
+
 int main(void)
 {
     test_finds_720p();
@@ -152,6 +276,11 @@ int main(void)
     test_malformed_length_field_overflow();
     test_length_exceeds_remaining_buffer();
     test_resolution_change_854x480_to_1280x720();
+    test_find_nal_public_finds_all_three();
+    test_find_nal_public_missing_type_returns_null();
+    test_find_nal_public_rejects_bad_args();
+    test_find_nal_public_truncated_returns_null();
+    test_find_nal_public_agrees_with_probe();
     printf("ALL TESTS PASSED\n");
     return 0;
 }

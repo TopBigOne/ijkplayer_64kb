@@ -119,6 +119,10 @@ typedef struct IJKFF_Pipenode_Opaque {
 
     SDL_SpeedSampler          sampler;
     volatile bool             abort;
+
+    // HEVC SPS 扫描：nal_size==0（非长度前缀流）导致扫描恒定失效时，每个 pipenode
+    // 实例只打一次警告，避免逐包刷屏
+    bool                      hevc_nal_size_warned;
 } IJKFF_Pipenode_Opaque;
 
 static SDL_AMediaCodec *create_codec_l(JNIEnv *env, IJKFF_Pipenode *node)
@@ -460,6 +464,173 @@ fail:
     return -1;
 }
 
+/* 用刚从码流里扫描到的 VPS/SPS/PPS 拼一份新的 hvcC，替换 codecpar 里那份仍然描述
+ * 旧分辨率的老 extradata。这样后续 recreate_format_l 走它已有的
+ * convert_hevc_nal_units() 就能自然拿到新参数集，不需要改动 recreate_format_l。
+ *
+ * 布局严格照 hevc_nal.h 里 convert_hevc_nal_units() 实际会读的字段来写：
+ *   [0..20]  21 字节固定头部，convert_hevc_nal_units 整段跳过、不读不校验。这里只把
+ *            byte0 写成 configurationVersion=1，用来同时满足两处判定：
+ *            convert_hevc_nal_units 开头的 "!p_buf[0] && !p_buf[1] && p_buf[2] <= 1
+ *            则返回 -1"，以及 recreate_format_l 里 "extradata[0] == 1" 的 hvcC 识别。
+ *   [21]     低 2 位 = lengthSizeMinusOne；convert_hevc_nal_units 会用它回写
+ *            opaque->nal_size，所以必须跟当前的 nal_size 保持一致。
+ *   [22]     numOfArrays = 3（VPS/SPS/PPS 各一个 array）。
+ *   之后每个 array：1 字节 NAL 类型（读取时 &0x3f）+ 2 字节大端 numNalus，
+ *            再跟着每个 NAL 的 2 字节大端长度 + NAL 原始字节（含 2 字节 NAL header）。
+ *
+ * 成功返回 0（codecpar->extradata 已换成新 blob），失败返回 -1（原 extradata 不动）。 */
+static int amc_rebuild_hevc_extradata_l(IJKFF_Pipenode_Opaque *opaque,
+                                        const uint8_t *vps_nal, int vps_size,
+                                        const uint8_t *sps_nal, int sps_size,
+                                        const uint8_t *pps_nal, int pps_size)
+{
+    const uint8_t *nals[3];
+    int            sizes[3];
+    const int      types[3]  = { FFHEVC_NAL_TYPE_VPS, FFHEVC_NAL_TYPE_SPS, FFHEVC_NAL_TYPE_PPS };
+    uint8_t       *buf       = NULL;
+    int            buf_size  = 23; /* 21 字节固定头 + lengthSizeMinusOne + numOfArrays */
+    int            pos       = 0;
+    int            i         = 0;
+
+    nals[0]  = vps_nal; sizes[0] = vps_size;
+    nals[1]  = sps_nal; sizes[1] = sps_size;
+    nals[2]  = pps_nal; sizes[2] = pps_size;
+
+    /* nal_size 合法值只有 1~4，越界就别拼了，免得写出非法的 lengthSizeMinusOne */
+    if (opaque->nal_size == 0 || opaque->nal_size > 4)
+        return -1;
+
+    for (i = 0; i < 3; i++) {
+        /* NAL 至少要有 2 字节 header；长度字段只有 2 字节，超过 0xFFFF 装不下 */
+        if (!nals[i] || sizes[i] < 2 || sizes[i] > 0xFFFF)
+            return -1;
+        buf_size += 1 + 2 + 2 + sizes[i];
+    }
+
+    buf = av_mallocz(buf_size + AV_INPUT_BUFFER_PADDING_SIZE);
+    if (!buf)
+        return -1;
+
+    buf[0]  = 1; /* configurationVersion；buf[1..20] 保持 0，这段没人读 */
+    buf[21] = (uint8_t)(0xFC | ((unsigned)(opaque->nal_size - 1) & 0x03u));
+    buf[22] = 3;
+    pos     = 23;
+
+    for (i = 0; i < 3; i++) {
+        buf[pos++] = (uint8_t)types[i];
+        buf[pos++] = 0;                                 /* numNalus 高字节 */
+        buf[pos++] = 1;                                 /* numNalus 低字节：每种各 1 个 */
+        buf[pos++] = (uint8_t)((sizes[i] >> 8) & 0xFF); /* nalUnitLength 高字节 */
+        buf[pos++] = (uint8_t)(sizes[i] & 0xFF);        /* nalUnitLength 低字节 */
+        memcpy(buf + pos, nals[i], sizes[i]);
+        pos += sizes[i];
+    }
+
+    av_freep(&opaque->codecpar->extradata);
+    opaque->codecpar->extradata      = buf;
+    opaque->codecpar->extradata_size = buf_size;
+    return 0;
+}
+
+/* HEVC 分辨率切换探测：扫描 packet 自身的 NAL 结构（不依赖 FFmpeg parser 的
+ * AV_PKT_DATA_NEW_EXTRADATA side data，hevc_parser 不产出这个），发现新 SPS 的
+ * 分辨率跟当前不一致时同步状态、并决定要不要触发 MediaCodec 完整重建。
+ *
+ * feed_input_buffer2 / feed_input_buffer 两处共用这一份实现。 */
+static void amc_probe_hevc_resolution_change_l(IJKFF_Pipenode *node, AVPacket *avpkt)
+{
+    IJKFF_Pipenode_Opaque *opaque     = node->opaque;
+    FFPlayer              *ffp        = opaque->ffp;
+    IJKFF_Pipeline        *pipeline   = opaque->pipeline;
+    const uint8_t         *vps_nal    = NULL;
+    const uint8_t         *sps_nal    = NULL;
+    const uint8_t         *pps_nal    = NULL;
+    int                    vps_size   = 0;
+    int                    sps_size   = 0;
+    int                    pps_size   = 0;
+    int                    new_width  = 0;
+    int                    new_height = 0;
+    bool                   need_recreate = true;
+
+    if (!avpkt || !avpkt->data || avpkt->size <= 0)
+        return;
+
+    // nal_size 只有 recreate_format_l 的 hvcC 分支才会赋值；Annex-B 来源（RTSP/TS 等）
+    // 永远是 0，扫描器的 nal_size 校验会让每次探测都静默返回"没找到"。静默失效很难
+    // 排查，这里每个 pipenode 实例打一次警告（逐包打会刷爆 logcat）。
+    if (opaque->nal_size == 0) {
+        if (!opaque->hevc_nal_size_warned) {
+            opaque->hevc_nal_size_warned = true;
+            ALOGW("HEVC SPS scan disabled: stream is not length-prefixed (nal_size=0), resolution-change detection unavailable for this source\n");
+        }
+        return;
+    }
+
+    if (ffhevc_probe_sps_size(avpkt->data, avpkt->size, opaque->nal_size,
+                              &new_width, &new_height) != 0)
+        return;
+    if (new_width == opaque->codecpar->width && new_height == opaque->codecpar->height)
+        return;
+
+    ALOGW("HEVC SPS scan: resolution changed %dx%d -> %dx%d\n",
+          opaque->codecpar->width, opaque->codecpar->height, new_width, new_height);
+
+    opaque->codecpar->width  = new_width;
+    opaque->codecpar->height = new_height;
+
+    // 只更新宽高的话，重建出来的 MediaCodec 会拿到"新分辨率 int + 旧 VPS/SPS/PPS"的
+    // csd-0。只有三种参数集都在这个 packet 里才拼得出完整的新 hvcC；编码器经常只重发
+    // SPS，这种情况退回"只更新宽高"的老行为并留一条日志说明参数集没被刷新。
+    vps_nal = ffhevc_find_nal_public(avpkt->data, avpkt->size, opaque->nal_size,
+                                     FFHEVC_NAL_TYPE_VPS, &vps_size);
+    sps_nal = ffhevc_find_nal_public(avpkt->data, avpkt->size, opaque->nal_size,
+                                     FFHEVC_NAL_TYPE_SPS, &sps_size);
+    pps_nal = ffhevc_find_nal_public(avpkt->data, avpkt->size, opaque->nal_size,
+                                     FFHEVC_NAL_TYPE_PPS, &pps_size);
+    if (vps_nal && sps_nal && pps_nal) {
+        if (0 == amc_rebuild_hevc_extradata_l(opaque, vps_nal, vps_size,
+                                              sps_nal, sps_size, pps_nal, pps_size)) {
+            ALOGI("HEVC SPS scan: refreshed hvcC extradata from packet (%d bytes)\n",
+                  opaque->codecpar->extradata_size);
+        } else {
+            ALOGW("HEVC SPS scan: rebuild hvcC extradata failed, parameter sets left stale\n");
+        }
+    } else {
+        ALOGW("HEVC SPS scan: VPS/PPS missing in this packet (vps=%d sps=%d pps=%d), parameter sets not refreshed from this packet\n",
+              vps_nal ? 1 : 0, sps_nal ? 1 : 0, pps_nal ? 1 : 0);
+    }
+
+    // 配了 max-width/max-height（App 主动声明了自适应包络）并且新分辨率没超出包络时，
+    // 不强制重建，把机会让给 MediaCodec 自己的 in-band 自适应（它会通过
+    // INFO_OUTPUT_FORMAT_CHANGED 报告结果）——否则重建永远抢跑，那两个提示就成了死代码。
+    // 没配这两个 option 时保持原有行为：一律完整重建。
+    if (ffp->mediacodec_max_width  > 0 && new_width  <= ffp->mediacodec_max_width &&
+        ffp->mediacodec_max_height > 0 && new_height <= ffp->mediacodec_max_height) {
+        need_recreate = false;
+    }
+
+    if (need_recreate) {
+        opaque->aformat_need_recreate = true;
+        ffpipeline_set_surface_need_reconfigure_l(pipeline, true);
+    } else {
+        // 不重建这条路上，codecpar 已经被我们提前同步成新分辨率，
+        // AMEDIACODEC__INFO_OUTPUT_FORMAT_CHANGED 那边的比较条件就不会再成立，
+        // 输出侧的 frame_width/frame_height 和上层通知会被漏掉。这里把它们补上；
+        // 如果解码器随后报出的 crop 显示尺寸跟 SPS 的编码尺寸不同，那边会再纠正一次。
+        ALOGI("HEVC SPS scan: %dx%d fits max-width/max-height hint (%dx%d), skip codec rebuild and let MediaCodec adapt in-band\n",
+              new_width, new_height, ffp->mediacodec_max_width, ffp->mediacodec_max_height);
+        if (opaque->frame_rotate_degrees == 90 || opaque->frame_rotate_degrees == 270) {
+            opaque->frame_width  = new_height;
+            opaque->frame_height = new_width;
+        } else {
+            opaque->frame_width  = new_width;
+            opaque->frame_height = new_height;
+        }
+        ffp_notify_msg3(ffp, FFP_MSG_VIDEO_SIZE_CHANGED, new_width, new_height);
+    }
+}
+
 static int feed_input_buffer2(JNIEnv *env, IJKFF_Pipenode *node, int64_t timeUs, int *enqueue_count)
 {
     IJKFF_Pipenode_Opaque *opaque   = node->opaque;
@@ -631,17 +802,7 @@ static int feed_input_buffer2(JNIEnv *env, IJKFF_Pipenode *node, int64_t timeUs,
             } else {
                 // side data 这条路对 HEVC 目前恒为 NULL（FFmpeg 的 hevc_parser 不产出这个
                 // side data），这里用不依赖 FFmpeg parser 的 NAL 扫描直接探测新 SPS 的分辨率
-                int new_width = 0, new_height = 0;
-                if (ffhevc_probe_sps_size(avpkt->data, avpkt->size, opaque->nal_size,
-                                           &new_width, &new_height) == 0 &&
-                    (new_width != opaque->codecpar->width || new_height != opaque->codecpar->height)) {
-                    ALOGW("HEVC SPS scan: resolution changed %dx%d -> %dx%d\n",
-                          opaque->codecpar->width, opaque->codecpar->height, new_width, new_height);
-                    opaque->codecpar->width  = new_width;
-                    opaque->codecpar->height = new_height;
-                    opaque->aformat_need_recreate = true;
-                    ffpipeline_set_surface_need_reconfigure_l(pipeline, true);
-                }
+                amc_probe_hevc_resolution_change_l(node, avpkt);
             }
         }
 
@@ -947,17 +1108,7 @@ static int feed_input_buffer(JNIEnv *env, IJKFF_Pipenode *node, int64_t timeUs, 
             } else {
                 // side data 这条路对 HEVC 目前恒为 NULL（FFmpeg 的 hevc_parser 不产出这个
                 // side data），这里用不依赖 FFmpeg parser 的 NAL 扫描直接探测新 SPS 的分辨率
-                int new_width = 0, new_height = 0;
-                if (ffhevc_probe_sps_size(avpkt->data, avpkt->size, opaque->nal_size,
-                                           &new_width, &new_height) == 0 &&
-                    (new_width != opaque->codecpar->width || new_height != opaque->codecpar->height)) {
-                    ALOGW("HEVC SPS scan: resolution changed %dx%d -> %dx%d\n",
-                          opaque->codecpar->width, opaque->codecpar->height, new_width, new_height);
-                    opaque->codecpar->width  = new_width;
-                    opaque->codecpar->height = new_height;
-                    opaque->aformat_need_recreate = true;
-                    ffpipeline_set_surface_need_reconfigure_l(pipeline, true);
-                }
+                amc_probe_hevc_resolution_change_l(node, avpkt);
             }
         }
 
