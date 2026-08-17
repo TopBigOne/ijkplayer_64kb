@@ -35,6 +35,7 @@
 #include "hevc_nal.h"
 #include "mpeg4_esds.h"
 #include "ffpipeline_android.h"
+#include "ffp_hevc_sps_probe.h"
 
 #define AMC_USE_AVBITSTREAM_FILTER 0
 #ifndef AMCTRACE
@@ -620,6 +621,20 @@ static int feed_input_buffer2(JNIEnv *env, IJKFF_Pipenode *node, int64_t timeUs,
 
                 av_frame_unref(frame);
                 avcodec_free_context(&new_avctx);
+            } else {
+                // side data 这条路对 HEVC 目前恒为 NULL（FFmpeg 的 hevc_parser 不产出这个
+                // side data），这里用不依赖 FFmpeg parser 的 NAL 扫描直接探测新 SPS 的分辨率
+                int new_width = 0, new_height = 0;
+                if (ffhevc_probe_sps_size(avpkt->data, avpkt->size, opaque->nal_size,
+                                           &new_width, &new_height) == 0 &&
+                    (new_width != opaque->codecpar->width || new_height != opaque->codecpar->height)) {
+                    ALOGW("HEVC SPS scan: resolution changed %dx%d -> %dx%d\n",
+                          opaque->codecpar->width, opaque->codecpar->height, new_width, new_height);
+                    opaque->codecpar->width  = new_width;
+                    opaque->codecpar->height = new_height;
+                    opaque->aformat_need_recreate = true;
+                    ffpipeline_set_surface_need_reconfigure_l(pipeline, true);
+                }
             }
         }
 
@@ -922,6 +937,20 @@ static int feed_input_buffer(JNIEnv *env, IJKFF_Pipenode *node, int64_t timeUs, 
 
                 av_frame_unref(frame);
                 avcodec_free_context(&new_avctx);
+            } else {
+                // side data 这条路对 HEVC 目前恒为 NULL（FFmpeg 的 hevc_parser 不产出这个
+                // side data），这里用不依赖 FFmpeg parser 的 NAL 扫描直接探测新 SPS 的分辨率
+                int new_width = 0, new_height = 0;
+                if (ffhevc_probe_sps_size(avpkt->data, avpkt->size, opaque->nal_size,
+                                           &new_width, &new_height) == 0 &&
+                    (new_width != opaque->codecpar->width || new_height != opaque->codecpar->height)) {
+                    ALOGW("HEVC SPS scan: resolution changed %dx%d -> %dx%d\n",
+                          opaque->codecpar->width, opaque->codecpar->height, new_width, new_height);
+                    opaque->codecpar->width  = new_width;
+                    opaque->codecpar->height = new_height;
+                    opaque->aformat_need_recreate = true;
+                    ffpipeline_set_surface_need_reconfigure_l(pipeline, true);
+                }
             }
         }
 
