@@ -91,6 +91,42 @@ static void test_truncated_packet_returns_error(void)
     printf("test_truncated_packet_returns_error: OK\n");
 }
 
+static void test_malformed_length_field_overflow(void)
+{
+    /* 回归测试：长度字段声明 0x80000005（大于 INT_MAX），
+     * 在直接转 int 时会变成负数 -2147483643，绕过旧的边界检查。
+     * 新的边界检查用无符号比较应该安全地拒绝这个。 */
+    uint8_t pkt[64];
+    int     w = 0, h = 0;
+    pkt[0] = 0x80;
+    pkt[1] = 0x00;
+    pkt[2] = 0x00;
+    pkt[3] = 0x05;
+    /* 在 4 字节长度后放一些垃圾数据，但不足 0x80000005 字节 */
+    memset(pkt + 4, 0xAA, sizeof(pkt) - 4);
+    int ret = ffhevc_probe_sps_size(pkt, sizeof(pkt), 4, &w, &h);
+    assert(ret == -1);
+    printf("test_malformed_length_field_overflow: OK\n");
+}
+
+static void test_length_exceeds_remaining_buffer(void)
+{
+    /* 回归测试：长度字段声明 1000 字节（技术上可以放进 int），
+     * 但实际 packet 只有 20 字节。边界检查应该安全地拒绝这个。 */
+    uint8_t pkt[20];
+    int     w = 0, h = 0;
+    /* 1000 = 0x000003e8，放在 4 字节大端长度字段 */
+    pkt[0] = 0x00;
+    pkt[1] = 0x00;
+    pkt[2] = 0x03;
+    pkt[3] = 0xe8;
+    /* 后面是垃圾数据 */
+    memset(pkt + 4, 0xBB, sizeof(pkt) - 4);
+    int ret = ffhevc_probe_sps_size(pkt, sizeof(pkt), 4, &w, &h);
+    assert(ret == -1);
+    printf("test_length_exceeds_remaining_buffer: OK\n");
+}
+
 static void test_resolution_change_854x480_to_1280x720(void)
 {
     /* 直接模拟用户的场景：先探测到 480p 的 SPS，再探测到 720p 的 SPS，
@@ -113,6 +149,8 @@ int main(void)
     test_finds_large_jump_4k();
     test_no_sps_returns_error();
     test_truncated_packet_returns_error();
+    test_malformed_length_field_overflow();
+    test_length_exceeds_remaining_buffer();
     test_resolution_change_854x480_to_1280x720();
     printf("ALL TESTS PASSED\n");
     return 0;

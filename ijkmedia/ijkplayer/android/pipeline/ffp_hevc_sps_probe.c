@@ -214,8 +214,11 @@ static const uint8_t *ffhevc_find_nal(const uint8_t *data, int size, size_t nal_
             len = (len << 8) | data[pos + i];
         pos += nal_len_bytes;
 
-        if (len == 0 || pos + (int)len > size)
-            break; /* 长度字段不合理，停止扫描，不越界读 */
+        /* 长度字段不合理，停止扫描，不越界读。检查时用无符号比较避免 int 溢出：
+         * 当 len 超过 INT_MAX 时不能直接转 int（会变负），而应该判断 len 是否超过
+         * 剩余缓冲区大小 (size - pos)。同时保证 pos <= size 再做减法防止下溢。 */
+        if (len == 0 || pos > size || len > (uint32_t)(size - pos))
+            break;
 
         if ((int)len >= 2) {
             nal_type = (data[pos] >> 1) & 0x3F;
