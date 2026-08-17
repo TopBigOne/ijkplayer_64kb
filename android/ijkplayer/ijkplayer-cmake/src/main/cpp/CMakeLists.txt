@@ -78,6 +78,7 @@ include_directories(${ijkmedia}/ijkplayer)
 file(GLOB_RECURSE SOURCE_IJKJ4A ${ijkmedia}/ijkj4a/*.c  ${ijkmedia}/ijkj4a/*.cpp)
 file(GLOB_RECURSE SOURCE_SDL ${ijkmedia}/ijksdl/*.c  ${ijkmedia}/ijksdl/*.cpp)
 file(GLOB_RECURSE SOURCE_IJKPLAYER ${ijkmedia}/ijkplayer/*.c ${ijkmedia}/ijkplayer/*.cpp)
+list(FILTER SOURCE_IJKPLAYER EXCLUDE REGEX ".*/pipeline/test/.*")
 file(GLOB_RECURSE SOURCE_SOUNDTOUCH ${ijkmedia}/ijksoundtouch/ijksoundtouch_wrap.cpp)
 
 # ============================================================
