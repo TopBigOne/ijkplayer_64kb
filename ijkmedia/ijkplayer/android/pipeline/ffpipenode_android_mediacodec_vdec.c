@@ -267,6 +267,13 @@ static int recreate_format_l(JNIEnv *env, IJKFF_Pipenode *node)
         ffp_notify_msg2(ffp, FFP_MSG_VIDEO_ROTATION_CHANGED, rotate_degrees);
     }
 
+    if (ffp->mediacodec_max_width > 0 && ffp->mediacodec_max_height > 0) {
+        ALOGI("amc: hint max-width/max-height: %d x %d\n",
+              ffp->mediacodec_max_width, ffp->mediacodec_max_height);
+        SDL_AMediaFormat_setInt32(opaque->input_aformat, "max-width",  ffp->mediacodec_max_width);
+        SDL_AMediaFormat_setInt32(opaque->input_aformat, "max-height", ffp->mediacodec_max_height);
+    }
+
     return 0;
 fail:
     return -1;
