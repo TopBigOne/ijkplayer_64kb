@@ -187,6 +187,8 @@ public final class IjkMediaPlayer extends AbstractMediaPlayer {
                 if (libLoader == null)
                     libLoader = sLocalLibLoader;
 
+                // libijkplayer.so 依赖 libwebsockets.so（ws/wss），必须先加载。
+                // 自定义 IjkLibLoader 或重新打包 .so 的 App 也要一并打包 libwebsockets.so。
                 libLoader.loadLibrary("websockets");
                 libLoader.loadLibrary("ijkplayer");
                 mIsLibLoaded = true;
