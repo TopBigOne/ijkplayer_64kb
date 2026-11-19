@@ -7,6 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AA57ED062EC91B0000000000 /* ijkws.c in Sources */ = {isa = PBXBuildFile; fileRef = AA57ED012EC91B0000000000 /* ijkws.c */; };
+		AA57ED072EC91B0000000000 /* ijkws.h in Headers */ = {isa = PBXBuildFile; fileRef = AA57ED022EC91B0000000000 /* ijkws.h */; };
+		AA57ED082EC91B0000000000 /* ijkws_buf.c in Sources */ = {isa = PBXBuildFile; fileRef = AA57ED032EC91B0000000000 /* ijkws_buf.c */; };
+		AA57ED092EC91B0000000000 /* ijkws_buf.h in Headers */ = {isa = PBXBuildFile; fileRef = AA57ED042EC91B0000000000 /* ijkws_buf.h */; };
+		AA57ED0A2EC91B0000000000 /* ijkws_resolve.c in Sources */ = {isa = PBXBuildFile; fileRef = AA57ED052EC91B0000000000 /* ijkws_resolve.c */; };
 		33BA6FBF254BC4D7004EB9F2 /* ijklas.c in Sources */ = {isa = PBXBuildFile; fileRef = B4449BD5250095700074CEDC /* ijklas.c */; };
 		33BA6FC0254BC4D9004EB9F2 /* ijklas.h in Headers */ = {isa = PBXBuildFile; fileRef = B4449BD4250095700074CEDC /* ijklas.h */; };
 		33BA6FC1254BC4DC004EB9F2 /* cJSON.c in Sources */ = {isa = PBXBuildFile; fileRef = B417F8E124F7C56C00D159BB /* cJSON.c */; };
@@ -146,6 +151,11 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		AA57ED012EC91B0000000000 /* ijkws.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = ijkws.c; sourceTree = "<group>"; };
+		AA57ED022EC91B0000000000 /* ijkws.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ijkws.h; sourceTree = "<group>"; };
+		AA57ED032EC91B0000000000 /* ijkws_buf.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = ijkws_buf.c; sourceTree = "<group>"; };
+		AA57ED042EC91B0000000000 /* ijkws_buf.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ijkws_buf.h; sourceTree = "<group>"; };
+		AA57ED052EC91B0000000000 /* ijkws_resolve.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = ijkws_resolve.c; sourceTree = "<group>"; };
 		454316201A66493700676070 /* ffpipeline_ios.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = ffpipeline_ios.c; path = ijkmedia/ijkplayer/ios/pipeline/ffpipeline_ios.c; sourceTree = "<group>"; };
 		454316211A66493700676070 /* ffpipeline_ios.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = ffpipeline_ios.h; path = ijkmedia/ijkplayer/ios/pipeline/ffpipeline_ios.h; sourceTree = "<group>"; };
 		454316221A66493700676070 /* ffpipenode_ios_videotoolbox_vdec.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = ffpipenode_ios_videotoolbox_vdec.h; path = ijkmedia/ijkplayer/ios/pipeline/ffpipenode_ios_videotoolbox_vdec.h; sourceTree = "<group>"; };
@@ -632,6 +642,11 @@
 				B4449BD4250095700074CEDC /* ijklas.h */,
 				B417F8E124F7C56C00D159BB /* cJSON.c */,
 				B417F8DB24F7C3B400D159BB /* cJSON.h */,
+				AA57ED012EC91B0000000000 /* ijkws.c */,
+				AA57ED022EC91B0000000000 /* ijkws.h */,
+				AA57ED032EC91B0000000000 /* ijkws_buf.c */,
+				AA57ED042EC91B0000000000 /* ijkws_buf.h */,
+				AA57ED052EC91B0000000000 /* ijkws_resolve.c */,
 				54A029B11D4700E6001C61C1 /* ijkasync.c */,
 				4DA7F6881F2B1E270032A499 /* ijkiourlhook.c */,
 				54A029B21D4700E6001C61C1 /* ijkavformat.h */,
@@ -805,6 +820,8 @@
 				5450B03C1E63EA4300568494 /* IJKSDLHudViewCell.h in Headers */,
 				5450B03D1E63EA4300568494 /* IJKVideoToolBox.h in Headers */,
 				33BA6FC2254BC4DE004EB9F2 /* cJSON.h in Headers */,
+				AA57ED072EC91B0000000000 /* ijkws.h in Headers */,
+				AA57ED092EC91B0000000000 /* ijkws_buf.h in Headers */,
 				5450B03E1E63EA4300568494 /* NSString+IJKMedia.h in Headers */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -958,6 +975,9 @@
 				5450AFEC1E63EA4300568494 /* ijksdl_vout_overlay_ffmpeg.c in Sources */,
 				5450AFED1E63EA4300568494 /* ijksdl_mutex.c in Sources */,
 				33BA6FC1254BC4DC004EB9F2 /* cJSON.c in Sources */,
+				AA57ED062EC91B0000000000 /* ijkws.c in Sources */,
+				AA57ED082EC91B0000000000 /* ijkws_buf.c in Sources */,
+				AA57ED0A2EC91B0000000000 /* ijkws_resolve.c in Sources */,
 				5450AFEE1E63EA4300568494 /* ijktree.c in Sources */,
 				5450AFEF1E63EA4300568494 /* IJKSDLAudioQueueController.m in Sources */,
 				5450AFF01E63EA4300568494 /* ijksdl_thread.c in Sources */,
@@ -1052,10 +1072,14 @@
 				"HEADER_SEARCH_PATHS[sdk=iphoneos*]" = (
 					"$(inherited)",
 					../../FFToolChain/build/product/ios/universal/ijkffmpeg/include,
+					../../FFToolChain/build/product/ios/universal/openssl/include,
+					../../FFToolChain/build/product/ios/universal/libwebsockets/include,
 				);
 				"HEADER_SEARCH_PATHS[sdk=iphonesimulator*]" = (
 					"$(inherited)",
 					"../../FFToolChain/build/product/ios/universal-simulator/ijkffmpeg/include",
+					"../../FFToolChain/build/product/ios/universal-simulator/openssl/include",
+					"../../FFToolChain/build/product/ios/universal-simulator/libwebsockets/include",
 				);
 				INFOPLIST_FILE = IJKMediaFramework/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 12.0;
@@ -1069,11 +1093,13 @@
 					"$(inherited)",
 					../../FFToolChain/build/product/ios/universal/ijkffmpeg/lib,
 					../../FFToolChain/build/product/ios/universal/openssl/lib,
+					../../FFToolChain/build/product/ios/universal/libwebsockets/lib,
 				);
 				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = (
 					"$(inherited)",
 					"../../FFToolChain/build/product/ios/universal-simulator/ijkffmpeg/lib",
 					"../../FFToolChain/build/product/ios/universal-simulator/openssl/lib",
+					"../../FFToolChain/build/product/ios/universal-simulator/libwebsockets/lib",
 				);
 				MACH_O_TYPE = mh_dylib;
 				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu99 gnu++11";
@@ -1085,6 +1111,7 @@
 					"-lswresample",
 					"-lswscale",
 					"-lavutil",
+					"-lwebsockets",
 					"-lcrypto",
 					"-lssl",
 				);
@@ -1136,10 +1163,14 @@
 				"HEADER_SEARCH_PATHS[sdk=iphoneos*]" = (
 					"$(inherited)",
 					../../FFToolChain/build/product/ios/universal/ijkffmpeg/include,
+					../../FFToolChain/build/product/ios/universal/openssl/include,
+					../../FFToolChain/build/product/ios/universal/libwebsockets/include,
 				);
 				"HEADER_SEARCH_PATHS[sdk=iphonesimulator*]" = (
 					"$(inherited)",
 					"../../FFToolChain/build/product/ios/universal-simulator/ijkffmpeg/include",
+					"../../FFToolChain/build/product/ios/universal-simulator/openssl/include",
+					"../../FFToolChain/build/product/ios/universal-simulator/libwebsockets/include",
 				);
 				INFOPLIST_FILE = IJKMediaFramework/Info.plist;
 				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
@@ -1154,11 +1185,13 @@
 					"$(inherited)",
 					../../FFToolChain/build/product/ios/universal/ijkffmpeg/lib,
 					../../FFToolChain/build/product/ios/universal/openssl/lib,
+					../../FFToolChain/build/product/ios/universal/libwebsockets/lib,
 				);
 				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = (
 					"$(inherited)",
 					"../../FFToolChain/build/product/ios/universal-simulator/ijkffmpeg/lib",
 					"../../FFToolChain/build/product/ios/universal-simulator/openssl/lib",
+					"../../FFToolChain/build/product/ios/universal-simulator/libwebsockets/lib",
 				);
 				MACH_O_TYPE = mh_dylib;
 				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu99 gnu++11";
@@ -1170,6 +1203,7 @@
 					"-lswresample",
 					"-lswscale",
 					"-lavutil",
+					"-lwebsockets",
 					"-lcrypto",
 					"-lssl",
 				);
