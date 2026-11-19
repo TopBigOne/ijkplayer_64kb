@@ -21,6 +21,7 @@
 
 #include "libavformat/avformat.h"
 #include "libavutil/avstring.h"
+#include "libavutil/common.h"
 #include "libavutil/dict.h"
 #include "libavutil/error.h"
 #include "libavutil/log.h"
@@ -319,8 +320,13 @@ int ijkws_open(IjkWsContext **out, const char *url, AVDictionary **opts, const A
     info.options             = LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT;
     info.user                = ctx;
     info.fd_limit_per_thread = IJKWS_FD_LIMIT;
-    /* lws 自己的连接/握手超时（默认 20s）放宽到 ws_timeout 之后，以本模块的计时为准 */
-    info.timeout_secs        = (unsigned int)(ctx->timeout_ms / 1000 + 2);
+    /*
+     * lws 自己的超时放宽到 ws_timeout 之后，以本模块的计时为准：
+     * timeout_secs 管握手阶段的 pending 超时（默认 20s，client-http.c），
+     * connect_timeout_secs 管 TCP connect（vhost 默认 20s，vhost.c / connect3.c）。
+     */
+    info.timeout_secs         = (unsigned int)(ctx->timeout_ms / 1000 + 2);
+    info.connect_timeout_secs = (unsigned int)(ctx->timeout_ms / 1000 + 2);
     ctx->lws = lws_create_context(&info);
     if (!ctx->lws) {
         av_log(NULL, AV_LOG_ERROR, "ijkws: lws_create_context failed\n");
@@ -387,10 +393,17 @@ fail:
 int ijkws_read(void *opaque, uint8_t *buf, int size)
 {
     IjkWsContext *ctx = (IjkWsContext *)opaque;
+    int64_t wait_start_us;
 
     if (!ctx || !buf || size <= 0)
         return AVERROR(EINVAL);
 
+    /*
+     * 读超时只计本次 read 等待期间的静默：起点取 max(进入本次 read 的时刻, 最近收到数据的时刻)。
+     * 调用方两次 read 之间停顿（如暂停、包队列已满）不计入，否则停顿超过 ws_timeout 后
+     * 第一次 read 会在 service 之前就误报超时，而 socket 里可能已有数据。
+     */
+    wait_start_us = av_gettime_relative();
     for (;;) {
         if (ijkws_buf_size(ctx->buf) > 0)
             return (int)ijkws_buf_read(ctx->buf, buf, (size_t)size);
@@ -400,13 +413,10 @@ int ijkws_read(void *opaque, uint8_t *buf, int size)
             return AVERROR_EOF;
         if (check_interrupt(ctx))
             return AVERROR_EXIT;
-        if (av_gettime_relative() - ctx->last_rx_us >= (int64_t)ctx->timeout_ms * 1000) {
-            /*
-             * 不改变连接状态，并重新计时：调用方若重试，会再等一个完整的 ws_timeout，
-             * 期间有数据到达仍可继续读。
-             */
+        if (av_gettime_relative() - FFMAX(wait_start_us, ctx->last_rx_us) >=
+            (int64_t)ctx->timeout_ms * 1000) {
+            /* 不改变连接状态：调用方若重试，会再等一个完整的 ws_timeout */
             av_log(NULL, AV_LOG_ERROR, "ijkws: no data for %d ms, read timeout\n", ctx->timeout_ms);
-            ctx->last_rx_us = av_gettime_relative();
             return AVERROR(ETIMEDOUT);
         }
         service_once(ctx);

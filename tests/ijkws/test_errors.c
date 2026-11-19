@@ -91,6 +91,64 @@ static void test_silent_server_read_timeout(void)
     CHECK(dt >= 450 && dt <= 800);
 }
 
+/* 调用方停顿超过 ws_timeout 后再读，不能误报超时（读超时只计 read 等待期间的静默） */
+static void test_no_spurious_timeout_after_consumer_stall(void)
+{
+    char path[1024];
+    IjkWsContext *ctx = NULL;
+    uint8_t *flv = NULL, *got = NULL, *rest = NULL;
+    size_t flv_len = 0, got_len = 0, rest_len = 0;
+    int ret = 0;
+
+    CHECK_EQ_INT(load_file(test_path(path, sizeof(path), "test.flv"), &flv, &flv_len), 0);
+    CHECK(flv_len > 64 * 1024);
+    CHECK_EQ_INT(open_with_timeout(&ctx, WS_BASE "/flv", 500), 0);
+    got = malloc(flv_len);
+    while (got_len < 64 * 1024) {
+        ret = ijkws_read(ctx, got + got_len, (int)(64 * 1024 - got_len));
+        if (ret <= 0)
+            break;
+        got_len += (size_t)ret;
+    }
+    if (ret > 0) {
+        usleep(1200 * 1000);   /* 不读：模拟暂停 / 包队列已满 */
+        ret = read_all(ctx, &rest, &rest_len);
+    }
+    ijkws_close(&ctx);
+    if (ret != AVERROR_EOF || got_len + rest_len != flv_len) {
+        fprintf(stderr, "  stall: ret=%d got %zu+%zu of %zu\n", ret, got_len, rest_len, flv_len);
+        free(flv); free(got); free(rest);
+        CHECK(!"stall read failed");
+    }
+    memcpy(got + got_len, rest, rest_len);
+    ret = memcmp(got, flv, flv_len);
+    free(flv); free(got); free(rest);
+    CHECK_EQ_INT(ret, 0);
+}
+
+/*
+ * 慢测试（IJKWS_SLOW_TESTS=1 时运行）：ws_timeout 超过 lws 默认的 20s TCP connect 超时，
+ * 仍应在 ws_timeout 处返回 ETIMEDOUT，而不是 20s 时被 lws 打成 EIO。
+ */
+static void test_connect_timeout_above_lws_default(void)
+{
+    IjkWsContext *ctx = NULL;
+    int64_t t0, dt;
+    int ret;
+    const char *slow = getenv("IJKWS_SLOW_TESTS");
+    if (!slow || strcmp(slow, "1") != 0) {
+        fprintf(stderr, "  skipped (set IJKWS_SLOW_TESTS=1)\n");
+        return;
+    }
+    t0 = now_ms();
+    ret = open_with_timeout(&ctx, "ws://10.255.255.1/", 22000);
+    dt = now_ms() - t0;
+    fprintf(stderr, "  connect timeout 22000: ret=%d %lldms\n", ret, (long long)dt);
+    CHECK_EQ_INT(ret, AVERROR(ETIMEDOUT));
+    CHECK(ctx == NULL);
+    CHECK(dt >= 22000 && dt <= 22800);
+}
+
 static void test_drop_without_close_is_eio(void)
 {
     IjkWsContext *ctx = NULL;
@@ -120,7 +178,9 @@ int main(void)
     RUN(test_connection_refused);
     RUN(test_connect_timeout);
     RUN(test_silent_server_read_timeout);
+    RUN(test_no_spurious_timeout_after_consumer_stall);
     RUN(test_drop_without_close_is_eio);
     RUN(test_bad_url_einval);
+    RUN(test_connect_timeout_above_lws_default);
     return test_finish();
 }
