@@ -5,7 +5,7 @@
 #     IJK_LWS_OPENSSL_VERSION_NUMBER / IJK_LWS_OPENSSL_VERSION_TEXT
 #
 # ijkws.c 会直接调用 OpenSSL 函数操作 lws 创建的 SSL 对象（见 fix_tls_for_ip_literal）。
-# Android 上 libwebsockets.so 静态链接并隐藏了自己的一份 OpenSSL，ijkws.c 的调用则解析到
+# Android 上 libijkwebsockets.so 静态链接并隐藏了自己的一份 OpenSSL，ijkws.c 的调用则解析到
 # libijkplayer.so 里的另一份；两份必须是同一个 OpenSSL 构建。ijkws.c 用这个头文件在编译期
 # 比较两边的 OPENSSL_VERSION_NUMBER，不一致直接 #error。
 #

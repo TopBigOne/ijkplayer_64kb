@@ -221,7 +221,7 @@ overflow:
  *   - 清掉 SNI：RFC 6066 §3 规定 SNI 不能是 IP 字面量；
  *   - 校验模式下把主机名校验换成对 URL 中 IP 的校验（证书 SAN 的 iPAddress）。
  *
- * 跨 OpenSSL 副本的不变式（Android）：libwebsockets.so 静态链接并隐藏了自己的一份 OpenSSL（A），
+ * 跨 OpenSSL 副本的不变式（Android）：libijkwebsockets.so 静态链接并隐藏了自己的一份 OpenSSL（A），
  * SSL* 由 A 创建；这里的 SSL_set_tlsext_host_name / SSL_get0_param / X509_VERIFY_PARAM_* 则解析到
  * libijkplayer.so 里的另一份（B）。set1_ip_asc / set1_host 会在 B 中分配或释放 param 里的内存，
  * 之后由 A 在 SSL_free 时释放，因此要求：

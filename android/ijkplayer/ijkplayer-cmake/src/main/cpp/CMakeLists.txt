@@ -171,11 +171,12 @@ target_link_libraries(ijkffmpeg-lib INTERFACE
 # libwebsockets 动态库（ws/wss 收流，供 ijkavformat/ijkws.c 使用）
 # 与其他第三方库不同，libwebsockets 以 .so 形式提供（内部已静态链接
 # 自己的 OpenSSL 并隐藏其符号，见 tools/build-libwebsockets-android.sh），
-# 因此用 SHARED IMPORTED 引入，libijkplayer.so 运行时依赖 libwebsockets.so。
+# 因此用 SHARED IMPORTED 引入，libijkplayer.so 运行时依赖 libijkwebsockets.so。
+# 文件名与 SONAME 都改为 libijkwebsockets.so，避免与第三方 SDK 自带的 libwebsockets.so 冲突。
 # ============================================================
 add_library(websockets-lib SHARED IMPORTED)
 set_target_properties(websockets-lib PROPERTIES
-    IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/third-libs/libwebsockets/libwebsockets-${ARCH}/lib/libwebsockets.so
+    IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/third-libs/libwebsockets/libwebsockets-${ARCH}/lib/libijkwebsockets.so
 )
 # libwebsockets.h 会 #include <openssl/ssl.h>，因此同时加入 OpenSSL 头文件路径
 # （与编译 libwebsockets 时使用的是同一份 OpenSSL）
