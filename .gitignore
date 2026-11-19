@@ -41,6 +41,8 @@ xcshareddata
 *.xccheckout
 
 android/ijkplayer/ijkplayer-cmake/.cxx
+android/build-libwebsockets/
+ios/build-libwebsockets/
 ios/IJKMediaPlayer/Release-iphoneos
 ios/IJKMediaPlayer/Release-iphonesimulator
 ios/xcframewrok/IJKMediaFramework.xcframework
