@@ -55,3 +55,42 @@ iOS 上 ETIMEDOUT 是 60（Darwin），所以读超时的错误码是 -60，Andr
 | I9 | 真机 wss 起播、退出耗时、错误码 | 同 I3–I7 | 同上 | 待测 | 2026-11-19 |
 | I10 | 真机 DNS 阶段打断 | 打开 Network Link Conditioner 的 100% Loss，用域名 ws URL 起播后马上退出 | 不卡顿 | 待测 | 2026-11-19 |
 | I11 | http-flv 回归 | 播放原有 http-flv 地址 | 仍正常播放 | 待测（模拟器上用本地 `python3 -m http.server` 测试时，请求一直没有到达服务器，原因未查，跟 ws 改动无关） | 2026-11-19 |
+
+## 稳定性（Task 9）
+
+工具：`tools/ws-flv-soak.sh`（基于 `tests/ijkws/build/ijkws_cat`，缺则自动 `tests/ijkws/build.sh cat`）。可指向任意 ws/wss 地址，`-o key=value` 原样传给 ijkws（可重复）。
+
+```
+tools/ws-flv-soak.sh soak   [-o k=v]... <url> <duration_s>            # 挂流，每 10s 采样 RSS 和累计字节，CSV 在 tests/ijkws/build/soak/<时间戳>/
+tools/ws-flv-soak.sh switch [-o k=v]... <url> <count> <interval_s>    # 反复 起进程->收到>=1字节->SIGINT，统计失败/relay 连接数/ESTABLISHED
+```
+
+判定：soak 在 ijkws_cat 提前退出、退出码非 0、RSS 首尾增长 > 10MB 或没收到数据时 FAIL；switch 在任一轮失败、relay_connect 与 relay_close 数量不等（读 `tests/ijkws/build/live/relay.jsonl`，可用 `RELAY_LOG` 覆盖，文件不存在则跳过该项）或 URL 端口上还有 ESTABLISHED 连接时 FAIL。wss 自签名证书加 `-o ws_tls_verify=0`。
+
+### Mac 缩短版（本地 live 环境）
+
+先 `tools/ws-flv-live.sh start`，跑完 `tools/ws-flv-live.sh stop`。
+
+| # | 项目 | 命令 | 预期 | 状态 | 日期 |
+|---|------|------|------|------|------|
+| M1 | 挂流 10 分钟 | `tools/ws-flv-soak.sh soak ws://127.0.0.1:18780/live/test.flv 600` | 不提前退出，RSS 首尾增长 < 10MB | 通过：603s，23007496 字节，均速 37.3 KB/s，RSS 起/止/最大 7648/4816/7648 KB，退出码 0 | 2026-11-19 |
+| M2 | ws 切流 300 次 | `tools/ws-flv-soak.sh switch ws://127.0.0.1:18780/live/test.flv 300 1` | 0 失败；relay connect == close；无残留 ESTABLISHED | 通过：335s，0 失败，connect=300 close=300，ESTABLISHED=0 | 2026-11-19 |
+| M3 | wss 切流 50 次 | `tools/ws-flv-soak.sh switch -o ws_tls_verify=0 wss://127.0.0.1:18781/live/test.flv 50 1` | 同 M2 | 通过：55s，0 失败，connect=50 close=50，ESTABLISHED=0 | 2026-11-19 |
+
+Mac 缩短版只覆盖 ijkws 本身（无解码、无播放器），不能替代 S1/S2/S6 的真机验证。
+
+### 待测（真机 / 真实服务器）
+
+以下均未执行（未提供生产地址，Android 设备未连接）。
+
+| # | 项目 | 步骤 | 预期 | 状态 | 日期 |
+|---|------|------|------|------|------|
+| S1 | Android 24h 挂流 | 示例 App 播放 ws 流（本地 live 环境用 `adb reverse`，或 `<PROD_WS_URL>`），屏幕常亮（`adb shell svc power stayon true`，测完 `false`）。每小时记录：`adb shell dumpsys meminfo tv.danmaku.ijk.media.example \| grep -E "TOTAL\|Native Heap\|Java Heap"` 和 `adb shell dumpsys gfxinfo tv.danmaku.ijk.media.example \| head -5`。可用循环：`while true; do date; adb shell dumpsys meminfo tv.danmaku.ijk.media.example \| grep -E "TOTAL PSS\|Native Heap"; sleep 3600; done >> meminfo.log` | 24h 不崩溃、不卡顿；TOTAL PSS 和 Native Heap 末值相对第 1 小时增长 < 10MB，无持续线性增长；logcat 无 ijkws 报错 | 待测 | 2026-11-19 |
+| S2 | iOS 24h 挂流 | 真机 Demo 的 Input URL 填 ws 地址，Xcode 从 Debug Navigator 的 Memory 仪表观察，或每小时在 Instruments 里用 Allocations/Leaks 取一次快照；也可 `leaks <pid>`（模拟器进程）。屏幕保持常亮（Demo 播放时默认不息屏，否则设置自动锁定为永不） | 24h 不崩溃；Memory 曲线平稳（增长 < 10MB），Leaks 无 ijkws / lws 相关泄漏 | 待测 | 2026-11-19 |
+| S3 | 弱网（Android） | 部分设备开发者选项没有网络限速。可行做法：Mac 开热点（共享网络）并把设备连上，Mac 上装 Xcode 的 Additional Tools 里的 Network Link Conditioner，设为 3G / Very Bad Network / 100% Loss 等档位，设备 URL 用 Mac 热点 IP（`ws://<Mac 热点 IP>:18780/live/test.flv`，live 环境监听 0.0.0.0 即可）。依次测：带宽 256kbps、延迟 500ms、丢包 10% | 画面卡顿但不崩溃；缓冲时 UI 可响应；恢复网络后继续播放；无 ANR | 待测 | 2026-11-19 |
+| S4 | 弱网（iOS 真机） | 设备「设置 > 开发者 > Network Link Conditioner」，依次选 Very Bad Network / 3G / 100% Loss，各播 5 分钟 | 同 S3 | 待测 | 2026-11-19 |
+| S5 | 断网 30s 恢复 | 播放中断开网络 30s（Android：开飞行模式；iOS：控制中心飞行模式，或 100% Loss），再恢复。Android 抓 `adb logcat -v time \| grep -E "ijkws\|FFP_MSG_ERROR"`（飞行模式 adb 无线连接会断，用 USB）。恢复后 App 内重新 prepare/播放 | 断网后在 ws_timeout（默认 10000ms）内出现错误回调（Android -110、iOS -60，或连接已被系统断开时 -5/-104）；恢复网络后重新播放成功，无需重启 App | 待测 | 2026-11-19 |
+| S6 | 设备端 1/s 切流 30 分钟 | 在示例 App（或临时测试代码）里每秒执行一次 stop/release 并重新创建播放器 prepare 同一 ws URL，共 1800 次；期间 `adb shell dumpsys meminfo <pkg>` 每 5 分钟记录一次；iOS 用 Xcode Memory 仪表。同时在 Mac 上看 relay：`grep -c relay_connect tests/ijkws/build/live/relay.jsonl` 与 `grep -c relay_close ...` | 无崩溃/ANR；PSS 增长 < 10MB；relay 的 connect 数 == close 数；`netstat -an \| grep 18780 \| grep -c ESTABLISHED` 回到 0 | 待测 | 2026-11-19 |
+| S7 | 其他协议回归 | 示例 App（Android 和 iOS）依次播放：http-flv、hls（.m3u8）、rtsp、本地文件 | 全部仍正常起播和退出，无 ijkws 相关日志 | 待测 | 2026-11-19 |
+| S8 | 真实服务器挂流 | Mac 上：`tools/ws-flv-soak.sh soak -o 'ws_headers=Authorization: Bearer <TOKEN>' <PROD_WS_URL> 3600`（无需鉴权则不带 `-o`；多个 header 用换行分隔，`\r\n` 或 `\n` 均可；wss 用正规证书则不用 `ws_tls_verify`） | PASS：进程不提前退出，RSS 增长 < 10MB，平均码率与服务器码流一致 | 待测 | 2026-11-19 |
+| S9 | 真实服务器切流 | `tools/ws-flv-soak.sh switch -o 'ws_headers=Authorization: Bearer <TOKEN>' <PROD_WS_URL> 300 1`（relay 日志检查自动跳过；服务端若有连接数监控请对照观察是否归零） | 0 失败，结束后本机 ESTABLISHED 为 0 | 待测 | 2026-11-19 |
