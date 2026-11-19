@@ -3,47 +3,21 @@
 # 不带参数时编译并运行全部 test_*.c；带参数时只运行指定的测试程序。
 set -uo pipefail
 
-HERE="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$HERE/../.." && pwd)"
-BUILD="$HERE/build"
-FFMPEG="${FFMPEG:-/usr/local/ffmpeg/4.4}"
-OPENSSL="${OPENSSL:-/opt/homebrew/opt/openssl@3}"
-LWS="$BUILD/lws"
-SRC="$ROOT/ijkmedia/ijkplayer/ijkavformat"
+. "$(dirname "$0")/common.sh"
 WS_PORT=18765
 WSS_PORT=18766
 
-mkdir -p "$BUILD"
+ensure_lws || exit 1
 
-if [ ! -f "$LWS/lib/libwebsockets.a" ]; then
-    "$ROOT/tools/build-libwebsockets-host.sh" || exit 1
-fi
-
-# 1. 测试用 FLV
 if [ ! -f "$BUILD/test.flv" ]; then
     "$FFMPEG/bin/ffmpeg" -nostdin -loglevel error -y \
         -f lavfi -i testsrc=size=320x240:rate=25 -f lavfi -i sine -t 5 \
         -c:v flv -c:a aac -f flv "$BUILD/test.flv" || exit 1
 fi
 
-# 2. 自签名证书（CN/SAN = localhost）和一张无关的 CA
-if [ ! -f "$BUILD/server.crt" ]; then
-    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-        -keyout "$BUILD/server.key" -out "$BUILD/server.crt" \
-        -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost" >/dev/null 2>&1 || exit 1
-fi
-if [ ! -f "$BUILD/other-ca.crt" ]; then
-    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-        -keyout "$BUILD/other-ca.key" -out "$BUILD/other-ca.crt" \
-        -subj "/CN=ijkws-other-ca" >/dev/null 2>&1 || exit 1
-fi
-
-# 4. 编译测试程序
-CFLAGS=(-std=c99 -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE -g -O0 -Wall -Wextra -Wno-unused-parameter
-        -I"$SRC" -I"$HERE" -I"$LWS/include" -I"$FFMPEG/include" -I"$OPENSSL/include")
-LIBS=("$LWS/lib/libwebsockets.a" -L"$FFMPEG/lib" -lavformat -lavutil
-      "$OPENSSL/lib/libssl.a" "$OPENSSL/lib/libcrypto.a" -lpthread)
-IJKWS_SRCS=("$SRC/ijkws.c" "$SRC/ijkws_buf.c" "$HERE/resolve_host.c")
+# 自签名证书（CN/SAN = localhost）和一张无关的 CA
+ensure_server_cert || exit 1
+ensure_other_ca || exit 1
 
 if [ $# -gt 0 ]; then
     TESTS=("$@")
@@ -55,7 +29,7 @@ fi
 PASS=0
 FAIL=0
 for t in "${TESTS[@]}"; do
-    if ! clang "${CFLAGS[@]}" -o "$BUILD/$t" "$HERE/$t.c" "${IJKWS_SRCS[@]}" "${LIBS[@]}"; then
+    if ! build_c "$t"; then
         echo "[BUILD FAIL] $t"
         FAIL=$((FAIL + 1))
     fi
@@ -69,7 +43,7 @@ READY="$BUILD/server.ready"
 rm -f "$READY"
 python3 "$HERE/ws_test_server.py" --port $WS_PORT --tls-port $WSS_PORT \
     --cert "$BUILD/server.crt" --key "$BUILD/server.key" \
-    --flv "$BUILD/test.flv" --log "$LOG" --ready-file "$READY" &
+    --flv "$BUILD/test.flv" --log "$LOG" --ready-file "$READY" 2>"$BUILD/server.stderr" &
 SERVER_PID=$!
 trap 'kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null' EXIT
 for _ in $(seq 1 50); do

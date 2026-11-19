@@ -240,13 +240,142 @@ async def handle_conn(reader, writer):
         log_event({"event": "end", "conn": cid})
 
 
+# ---------------------------------------------------------------- relay 模式
+# 把 --relay-http-base 上的 HTTP 直播流（如 SRS 的 HTTP-FLV）转成 WebSocket 二进制帧。
+RELAY_FRAME = 64 * 1024
+
+async def relay_open_upstream(path_q):
+    """GET 上游；返回 (status, reader, writer, chunked)。"""
+    u = urlsplit(args.relay_http_base)
+    host = u.hostname
+    port = u.port or 80
+    r, w = await asyncio.wait_for(asyncio.open_connection(host, port), 5)
+    w.write(("GET %s HTTP/1.1\r\nHost: %s\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+             % (path_q, u.netloc)).encode())
+    await w.drain()
+    raw = await asyncio.wait_for(r.readuntil(b"\r\n\r\n"), args.relay_header_timeout)
+    lines = raw.decode("latin-1").split("\r\n")
+    status = int(lines[0].split(" ")[1])
+    hdrs = {}
+    for ln in lines[1:]:
+        k, _, v = ln.partition(":")
+        if k:
+            hdrs[k.strip().lower()] = v.strip()
+    chunked = "chunked" in hdrs.get("transfer-encoding", "").lower()
+    return status, r, w, chunked
+
+async def relay_body(reader, chunked):
+    """异步生成器：产出上游 body 数据块（≤ RELAY_FRAME）。"""
+    if chunked:
+        while True:
+            line = await reader.readline()
+            if not line:
+                return
+            size = int(line.split(b";")[0].strip() or b"0", 16)
+            if size == 0:
+                return
+            left = size
+            while left > 0:
+                d = await reader.read(min(left, RELAY_FRAME))
+                if not d:
+                    return
+                left -= len(d)
+                yield d
+            await reader.readexactly(2)  # chunk 后的 CRLF
+    else:
+        while True:
+            d = await reader.read(RELAY_FRAME)
+            if not d:
+                return
+            yield d
+
+async def handle_relay(reader, writer):
+    global conn_seq
+    conn_seq += 1
+    cid = conn_seq
+    up_w = None
+    reason = "end"
+    try:
+        raw = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 10)
+        lines = raw.decode("latin-1").split("\r\n")
+        request_line = lines[0]
+        hmap = {}
+        for ln in lines[1:]:
+            k, _, v = ln.partition(":")
+            if k:
+                hmap[k.strip().lower()] = v.strip()
+        parts = request_line.split(" ")
+        target = parts[1] if len(parts) > 1 else "/"
+        peer = writer.get_extra_info("peername")
+        log_event({"event": "relay_connect", "conn": cid, "target": target,
+                   "peer": peer[0] if peer else None})
+        try:
+            status, ur, up_w, chunked = await relay_open_upstream(target)
+        except Exception as e:
+            reason = "upstream_error: %r" % (e,)
+            writer.write(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            await writer.drain()
+            return
+        if status != 200:
+            reason = "upstream_status_%d" % status
+            writer.write(("HTTP/1.1 %d Relay\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                          % status).encode())
+            await writer.drain()
+            return
+        key = hmap.get("sec-websocket-key", "")
+        accept = base64.b64encode(hashlib.sha1(key.encode() + WS_GUID).digest()).decode()
+        writer.write(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                      "Sec-WebSocket-Accept: %s\r\n\r\n" % accept).encode())
+        await writer.drain()
+
+        conn = Conn(cid, reader, writer, target)
+        rtask = asyncio.ensure_future(conn.read_loop())
+
+        async def pump():
+            async for d in relay_body(ur, chunked):
+                await conn.send(frame(OP_BIN, d))
+            return "upstream_eof"
+        ptask = asyncio.ensure_future(pump())
+        done, _ = await asyncio.wait({rtask, ptask}, return_when=asyncio.FIRST_COMPLETED)
+        if ptask in done:
+            try:
+                reason = ptask.result()
+                await conn.send_close(1000)
+            except Exception as e:
+                reason = "client_gone"
+        else:
+            reason = "client_closed"
+        ptask.cancel()
+        rtask.cancel()
+    except Exception as e:
+        reason = "error: %r" % (e,)
+    finally:
+        for w in (up_w, writer):
+            try:
+                if w:
+                    w.close()
+            except Exception:
+                pass
+        log_event({"event": "relay_close", "conn": cid, "reason": reason})
+
+async def handle_relay_conn(reader, writer):
+    await handle_relay(reader, writer)
+
 async def main():
-    servers = [await asyncio.start_server(handle_conn, ["127.0.0.1", "::1"], args.port)]
-    if args.tls_port:
+    servers = []
+    if args.port:
+        servers.append(await asyncio.start_server(handle_conn, ["127.0.0.1", "::1"], args.port))
+    if args.port and args.tls_port:
         sctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         sctx.load_cert_chain(args.cert, args.key)
         sctx.sni_callback = lambda sslobj, name, c: sni_names.__setitem__(id(sslobj), name)
         servers.append(await asyncio.start_server(handle_conn, ["127.0.0.1", "::1"], args.tls_port, ssl=sctx))
+    if args.relay_http_base:
+        servers.append(await asyncio.start_server(handle_relay_conn, "0.0.0.0", args.relay_port))
+        if args.cert and args.key:
+            rctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+            rctx.load_cert_chain(args.cert, args.key)
+            servers.append(await asyncio.start_server(handle_relay_conn, "0.0.0.0", args.relay_tls_port, ssl=rctx))
     if args.ready_file:
         with open(args.ready_file, "w") as f:
             f.write(str(os.getpid()))
@@ -255,16 +384,22 @@ async def main():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--port", type=int, required=True)
+    ap.add_argument("--port", type=int, help="测试监听端口（ws）；省略则不开测试监听")
     ap.add_argument("--tls-port", type=int)
     ap.add_argument("--cert")
     ap.add_argument("--key")
-    ap.add_argument("--flv", required=True)
+    ap.add_argument("--flv")
     ap.add_argument("--log", required=True)
     ap.add_argument("--ready-file")
+    ap.add_argument("--relay-http-base", help="开启转发模式：上游 HTTP 直播流的 base URL，如 http://127.0.0.1:8080")
+    ap.add_argument("--relay-port", type=int, default=18780)
+    ap.add_argument("--relay-tls-port", type=int, default=18781)
+    ap.add_argument("--relay-header-timeout", type=float, default=5,
+                    help="等上游响应头的秒数（SRS 对未推流的 .flv 会挂起不回头）；超时回 502")
     args = ap.parse_args()
-    with open(args.flv, "rb") as f:
-        flv_data = f.read()
+    if args.flv:
+        with open(args.flv, "rb") as f:
+            flv_data = f.read()
     log_fp = open(args.log, "a")
     try:
         asyncio.run(main())
