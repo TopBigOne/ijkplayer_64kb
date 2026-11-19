@@ -746,8 +746,14 @@ int ijkws_read(void *opaque, uint8_t *buf, int size)
             return AVERROR_EXIT;
         if (av_gettime_relative() - FFMAX(wait_start_us, ctx->last_rx_us) >=
             (int64_t)ctx->timeout_ms * 1000) {
-            /* 不改变连接状态：调用方若重试，会再等一个完整的 ws_timeout */
+            /*
+             * 错误粘滞：连接视为已死，之后的 read 立即返回 ETIMEDOUT。
+             * FFmpeg（flv 探测 / avio）拿到错误后还会继续调用 read，若每次重新等一个
+             * 完整窗口，prepare 要等约 3 倍 ws_timeout 才失败。
+             * 状态变为 ERROR 后，ijkws_close 也会跳过优雅关闭（graceful_close 只处理 ESTABLISHED）。
+             */
             av_log(NULL, AV_LOG_ERROR, "ijkws: no data for %d ms, read timeout\n", ctx->timeout_ms);
+            set_error(ctx, AVERROR(ETIMEDOUT));
             return AVERROR(ETIMEDOUT);
         }
         maybe_resume_rx(ctx);

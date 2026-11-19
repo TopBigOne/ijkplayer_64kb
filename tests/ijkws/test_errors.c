@@ -92,6 +92,40 @@ static void test_silent_server_read_timeout(void)
 }
 
 /* 调用方停顿超过 ws_timeout 后再读，不能误报超时（读超时只计 read 等待期间的静默） */
+/* 读超时后错误粘滞：后续 read 立即返回 ETIMEDOUT，不再等新窗口；close 也不能拖长 */
+static void test_read_timeout_sticky(void)
+{
+    IjkWsContext *ctx = NULL;
+    uint8_t buf[4096];
+    int64_t t0, dt;
+    int ret, i;
+    CHECK_EQ_INT(open_with_timeout(&ctx, WS_BASE "/silent", 500), 0);
+    t0 = now_ms();
+    ret = ijkws_read(ctx, buf, sizeof(buf));
+    dt = now_ms() - t0;
+    fprintf(stderr, "  sticky read 1: ret=%d %lldms\n", ret, (long long)dt);
+    if (ret != AVERROR(ETIMEDOUT) || dt < 450 || dt > 800) {
+        ijkws_close(&ctx);
+        CHECK(!"first read not ETIMEDOUT in 450..800ms");
+    }
+    for (i = 2; i <= 3; i++) {
+        t0 = now_ms();
+        ret = ijkws_read(ctx, buf, sizeof(buf));
+        dt = now_ms() - t0;
+        fprintf(stderr, "  sticky read %d: ret=%d %lldms\n", i, ret, (long long)dt);
+        if (ret != AVERROR(ETIMEDOUT) || dt >= 50) {
+            ijkws_close(&ctx);
+            CHECK(!"later read not immediate ETIMEDOUT");
+        }
+    }
+    t0 = now_ms();
+    ijkws_close(&ctx);
+    dt = now_ms() - t0;
+    fprintf(stderr, "  sticky close: %lldms\n", (long long)dt);
+    CHECK(ctx == NULL);
+    CHECK(dt <= 150);
+}
+
 static void test_no_spurious_timeout_after_consumer_stall(void)
 {
     char path[1024];
@@ -178,6 +212,7 @@ int main(void)
     RUN(test_connection_refused);
     RUN(test_connect_timeout);
     RUN(test_silent_server_read_timeout);
+    RUN(test_read_timeout_sticky);
     RUN(test_no_spurious_timeout_after_consumer_stall);
     RUN(test_drop_without_close_is_eio);
     RUN(test_bad_url_einval);
