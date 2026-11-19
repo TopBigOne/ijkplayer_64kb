@@ -167,6 +167,23 @@ target_link_libraries(ijkffmpeg-lib INTERFACE
     ${FFMPEG_LIB_DIR}/libavutil.a     # 公共工具函数库（必须放最后）
 )
 
+# ============================================================
+# libwebsockets 动态库（ws/wss 收流，供 ijkavformat/ijkws.c 使用）
+# 与其他第三方库不同，libwebsockets 以 .so 形式提供（内部已静态链接
+# 自己的 OpenSSL 并隐藏其符号，见 tools/build-libwebsockets-android.sh），
+# 因此用 SHARED IMPORTED 引入，libijkplayer.so 运行时依赖 libwebsockets.so。
+# ============================================================
+add_library(websockets-lib SHARED IMPORTED)
+set_target_properties(websockets-lib PROPERTIES
+    IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/third-libs/libwebsockets/libwebsockets-${ARCH}/lib/libwebsockets.so
+)
+# libwebsockets.h 会 #include <openssl/ssl.h>，因此同时加入 OpenSSL 头文件路径
+# （与编译 libwebsockets 时使用的是同一份 OpenSSL）
+include_directories(
+    third-libs/libwebsockets/libwebsockets-${ARCH}/include
+    third-libs/openssl/openssl-${ARCH}/include
+)
+
 # 查找系统 zlib（Android NDK 内置）
 # FFmpeg 的封装层（avformat）在解析 ZIP/gzip 容器时依赖 zlib。
 # CMake 默认会将 libz 排在 FFmpeg 之后，导致链接顺序错误，
@@ -182,6 +199,7 @@ target_link_libraries(ijkffmpeg-lib INTERFACE ${z-lib} openssl-lib)
 #   ijkffmpeg-lib  —— FFmpeg（含 zlib、OpenSSL）
 #   yuv-lib        —— libyuv 色彩转换
 #   soundtouch-lib —— 变速变调
+#   websockets-lib —— libwebsockets（ws/wss 收流，动态库）
 #   log            —— Android 日志（__android_log_print 等）
 #   android        —— Android Native API（AAssetManager、ANativeWindow 等）
 #   EGL            —— OpenGL ES 上下文管理
@@ -194,6 +212,7 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     ijkffmpeg-lib
     yuv-lib
     soundtouch-lib
+    websockets-lib
     log
     android
     EGL

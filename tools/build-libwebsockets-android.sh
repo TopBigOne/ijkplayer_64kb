@@ -50,6 +50,7 @@ for arch in "${ARCHS[@]}"; do
 
     echo "===== libwebsockets $arch ($abi) ====="
     rm -rf "$bld" "$out"
+    mkdir -p "$BUILD_ROOT"
     cmake -S "$LWS_SRC" -B "$bld" -G Ninja \
         -DCMAKE_MAKE_PROGRAM="$NINJA" \
         -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
