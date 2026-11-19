@@ -56,11 +56,12 @@ def frame(opcode, payload, fin=True):
 
 
 class Conn:
-    def __init__(self, cid, reader, writer, path):
+    def __init__(self, cid, reader, writer, path, query=""):
         self.cid = cid
         self.reader = reader
         self.writer = writer
         self.path = path
+        self.query = query
         self.close_sent = False
         self.peer_closed = asyncio.Event()
         self.gone = False
@@ -94,7 +95,9 @@ class Conn:
                 for i in range(n):
                     data[i] ^= mask[i & 3]
                 if opcode == OP_PING:
-                    await self.send(frame(OP_PONG, bytes(data)))
+                    log_event({"event": "ping_received", "conn": self.cid, "len": n})
+                    if self.path != "/nopong":  # /nopong：模拟不回 PONG 的网关
+                        await self.send(frame(OP_PONG, bytes(data)))
                 elif opcode == OP_PONG:
                     log_event({"event": "pong_received", "conn": self.cid,
                                "masked": bool(masked), "len": n})
@@ -171,6 +174,21 @@ async def behave(conn):
     elif p == "/drop":
         await push_messages(conn, flv_data[:DROP_BYTES], FLV_MSG)
         # 直接关 TCP，不发 close 帧
+    elif p == "/nopong":
+        # 慢速持续推流 secs 秒（query 给出，默认 330）后正常结束；从不回复客户端的 PING
+        secs = 330
+        for kv in conn.query.split("&"):
+            k, _, v = kv.partition("=")
+            if k == "secs" and v.isdigit():
+                secs = int(v)
+        deadline = time.monotonic() + secs
+        off = 0
+        while time.monotonic() < deadline:
+            msg = flv_data[off:off + FLV_MSG]
+            off = off + FLV_MSG if off + FLV_MSG < len(flv_data) else 0
+            await conn.send(frame(OP_BIN, msg))
+            await asyncio.sleep(0.1)
+        await finish_normal(conn)
     elif p == "/close-silent":
         await push_messages(conn, flv_data, FLV_MSG)
         # 收到客户端 close 后不回复也不断开：一直挂着直到客户端断开
@@ -228,7 +246,7 @@ async def handle_conn(reader, writer):
         writer.write(resp.encode())
         await writer.drain()
 
-        conn = Conn(cid, reader, writer, path)
+        conn = Conn(cid, reader, writer, path, query)
         rtask = asyncio.ensure_future(conn.read_loop())
         try:
             await behave(conn)

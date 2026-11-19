@@ -109,6 +109,7 @@ struct IjkWsContext {
     char                   host_hdr[272];   /* Host 头：host 或 host:port，IPv6 字面量加 [] */
     char                   ip[64];
     char                   path[IJKWS_HDR_LIMIT];
+    char                   log_url[512]; /* 日志用：scheme://host:port/path，query 换成 "?<redacted>" */
     int                    port;
     int                    host_is_ip;  /* URL 主机是 IPv4/IPv6 字面量 */
 
@@ -138,6 +139,8 @@ static void init_lws_log(void)
 }
 
 /* ---------------------------------------------------------------- lws 回调 */
+
+static int check_interrupt(const IjkWsContext *ctx);
 
 static void wake_cb(lws_sorted_usec_list_t *sul)
 {
@@ -288,14 +291,18 @@ static int ws_callback(struct lws *wsi, enum lws_callback_reasons reason,
          */
         unsigned int status = wsi ? lws_http_client_http_response(wsi) : 0;
         int err = http_status_to_averror(status);
-        if (status)
-            av_log(NULL, AV_LOG_ERROR, "ijkws: connect %s://%s:%d%s failed: HTTP %u (%s)\n",
-                   ctx->scheme, ctx->host, ctx->port, ctx->path, status,
-                   in ? (const char *)in : "unknown");
+        /*
+         * 用户取消正在进行的连接时，ijkws_open 走 ijkws_close → lws_context_destroy，
+         * lws 也会回调这里；这不是错误，不打 ERROR 日志。
+         */
+        if (ctx->closing || check_interrupt(ctx))
+            ;
+        else if (status)
+            av_log(NULL, AV_LOG_ERROR, "ijkws: connect %s failed: HTTP %u (%s)\n",
+                   ctx->log_url, status, in ? (const char *)in : "unknown");
         else
-            av_log(NULL, AV_LOG_ERROR, "ijkws: connect %s://%s:%d%s failed: %s\n",
-                   ctx->scheme, ctx->host, ctx->port, ctx->path,
-                   in ? (const char *)in : "unknown");
+            av_log(NULL, AV_LOG_ERROR, "ijkws: connect %s failed: %s\n",
+                   ctx->log_url, in ? (const char *)in : "unknown");
         set_error(ctx, err);
         ctx->wsi = NULL;
         break;
@@ -362,6 +369,24 @@ static int ws_callback(struct lws *wsi, enum lws_callback_reasons reason,
     return 0;
 }
 
+/*
+ * 关掉 lws 的连接有效性检查（validity）：默认策略（context.c default_retry）是距上次“确认有效”
+ * 300s 发 PING、310s 仍无 PONG 就断开；只有 PONG 等才会确认有效（ops-ws.c / client-parser-ws.c
+ * → _lws_validity_confirmed_role），数据帧不算。服务器 / 网关不回 PONG 时，每路流都会在约 310s 断开。
+ * 存活由本模块的 ws_timeout（读期间无数据超时）负责，不需要 lws 的这套机制。
+ *
+ * 只能放在 connect info 上：lws_client_connect_via_info 把它存到 wsi->retry_policy（connect.c），
+ * _lws_validity_confirmed_role 在 secs_since_valid_hangup == 0 时直接返回，validity 定时器从不安排，
+ * PING 与断开都不会发生。context 级的 info.retry_and_idle_policy 在 secs_since_valid_ping 为 0 时
+ * 会被忽略（context.c 仍用 300/310），不能用。
+ * wsi 只保存指针，所以必须比 wsi 活得久：用 static const。
+ * retry_ms_table_count = 0：lws_retry_get_delay_ms 不读表；ws 客户端连接不走 lws 的重试（只连一个 IP）。
+ */
+static const lws_retry_bo_t ws_no_validity_policy = {
+    .secs_since_valid_ping   = 0,
+    .secs_since_valid_hangup = 0,
+};
+
 static const struct lws_protocols ws_protocols[] = {
     { "ijkws", ws_callback, 0, 0, 0, NULL, 0 },
     LWS_PROTOCOL_LIST_TERM
@@ -404,6 +429,31 @@ static int take_option(AVDictionary **opts, const char *key, char **dst, int del
     if (del)
         av_dict_set(opts, key, NULL, 0);
     return *dst ? 0 : AVERROR(ENOMEM);
+}
+
+/*
+ * 日志脱敏：URL 的 query（常带 token / 签名）一律不打印，替换为 "?<redacted>"；
+ * 原始 URL 里的 userinfo（user:pass@）也去掉。fragment 不会发给服务器，一并截掉。
+ * out 总是以 '\0' 结尾，超长时截断。
+ */
+static void redact_url(char *out, size_t out_size, const char *url)
+{
+    const char *rest = url, *sep = strstr(url, "://");
+    size_t n;
+
+    out[0] = '\0';
+    /* 只认 query / path 之前的 "://"（query 里可能嵌着别的 URL） */
+    if (sep && (size_t)(sep - url) < strcspn(url, "/?#")) {
+        const char *auth_end = sep + 3 + strcspn(sep + 3, "/?#@");
+        av_strlcatf(out, out_size, "%.*s", (int)(sep + 3 - url), url);
+        rest = sep + 3;
+        if (*auth_end == '@')            /* 跳过 userinfo */
+            rest = auth_end + 1;
+    }
+    n = strcspn(rest, "?#");
+    av_strlcatf(out, out_size, "%.*s", (int)n, rest);
+    if (rest[n] == '?')
+        av_strlcat(out, "?<redacted>", out_size);
 }
 
 /* 握手 Header 的值不能含 CR/LF，否则可以注入任意 Header */
@@ -474,12 +524,16 @@ static int parse_options(IjkWsContext *ctx, AVDictionary **opts)
     }
     if (ctx->headers) {
         const char *s = ctx->headers;
+        int line = 0;
         while (*s) {
             size_t n = strcspn(s, "\r\n");
             const char *colon = memchr(s, ':', n);
+            if (n > 0)
+                line++;
             /* 以 SP / HTAB 开头是续行（obs-fold，RFC 7230 §3.2.4 已废弃，服务器可能拒绝或误解析） */
             if (n > 0 && (!colon || colon == s || *s == ' ' || *s == '\t')) {
-                av_log(NULL, AV_LOG_ERROR, "ijkws: malformed ws_headers line '%.*s'\n", (int)n, s);
+                /* 不打印行内容：Header 值可能是凭据 */
+                av_log(NULL, AV_LOG_ERROR, "ijkws: malformed ws_headers line %d (expect \"Name: value\")\n", line);
                 ret = AVERROR(EINVAL);
                 break;
             }
@@ -535,6 +589,14 @@ static int parse_url(IjkWsContext *ctx, const char *url)
         av_strlcpy(ctx->path, path, sizeof(ctx->path));
     else
         snprintf(ctx->path, sizeof(ctx->path), "/%s", path);
+
+    {
+        char host_port[300], path_redacted[sizeof(ctx->log_url)];
+        snprintf(host_port, sizeof(host_port), strchr(ctx->host, ':') ? "[%s]:%d" : "%s:%d",
+                 ctx->host, ctx->port);
+        redact_url(path_redacted, sizeof(path_redacted), ctx->path);
+        snprintf(ctx->log_url, sizeof(ctx->log_url), "%s://%s%s", ctx->scheme, host_port, path_redacted);
+    }
     return 0;
 }
 
@@ -572,7 +634,9 @@ int ijkws_open(IjkWsContext **out, const char *url, AVDictionary **opts, const A
 
     ret = parse_url(ctx, url);
     if (ret < 0) {
-        av_log(NULL, AV_LOG_ERROR, "ijkws: invalid url %s\n", url);
+        char redacted[512];
+        redact_url(redacted, sizeof(redacted), url);
+        av_log(NULL, AV_LOG_ERROR, "ijkws: invalid url %s\n", redacted);
         goto fail;
     }
     is_wss = !av_strcasecmp(ctx->scheme, "wss");
@@ -670,6 +734,7 @@ int ijkws_open(IjkWsContext **out, const char *url, AVDictionary **opts, const A
     ci.protocol = ctx->protocol;
     ci.local_protocol_name = ws_protocols[0].name;
     ci.pwsi     = &ctx->wsi;
+    ci.retry_and_idle_policy = &ws_no_validity_policy;   /* 不发 PING、不因无 PONG 断开 */
     if (is_wss && ctx->tls_verify) {
         /* 严格校验：证书链（只信任 ws_ca_file）+ 主机名（IP 字面量按 IP） */
         ci.ssl_connection = LCCSCF_USE_SSL;
@@ -698,8 +763,8 @@ int ijkws_open(IjkWsContext **out, const char *url, AVDictionary **opts, const A
         }
         remain_us = deadline_us - av_gettime_relative();
         if (remain_us <= 0) {
-            av_log(NULL, AV_LOG_ERROR, "ijkws: connect %s://%s:%d%s timeout after %d ms\n",
-                   ctx->scheme, ctx->host, ctx->port, ctx->path, ctx->timeout_ms);
+            av_log(NULL, AV_LOG_ERROR, "ijkws: connect %s timeout after %d ms\n",
+                   ctx->log_url, ctx->timeout_ms);
             ret = AVERROR(ETIMEDOUT);
             goto fail;
         }
