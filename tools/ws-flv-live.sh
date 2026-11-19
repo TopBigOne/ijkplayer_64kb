@@ -26,9 +26,9 @@ pid_is_ours() {  # name pid
     local args
     args="$(ps -o args= -p "$2" 2>/dev/null)" || return 1
     case "$1" in
-        srs)    [[ "$args" == "$SRS_BIN"* ]] ;;
+        srs)    [[ -n "$SRS_BIN" && "$args" == "$SRS_BIN"* ]] ;;
         ffmpeg) [[ "$args" == "$FF "* && "$args" == *"rtmp://127.0.0.1:$RTMP_PORT/live/test"* ]] ;;
-        relay)  [[ "$args" == *python* && "$args" == *ws_test_server.py* ]] ;;
+        relay)  [[ "$args" == *"$HERE/ws_test_server.py"* ]] ;;
     esac
 }
 
