@@ -1,6 +1,8 @@
 /*
  * 主机测试用的 ijkws_resolve：直接 getaddrinfo + getnameinfo(NI_NUMERICHOST)，
  * 忽略 timeout 和 int_cb。设备端实现见 ijkmedia/ijkplayer/ijkavformat/ijkws_resolve.c。
+ * 注意：设备端"解析失败(EIO) vs 解析超时(ETIMEDOUT)"的区分（按耗时判断，见那边注释）
+ * 依赖 ijk 补丁版 libavformat，主机测试覆盖不到，由 doc/ws-flv-verification.md 的真机项验证。
  */
 #include <errno.h>
 #include <netdb.h>

@@ -14,6 +14,7 @@
 
 #include "libavutil/error.h"
 #include "libavutil/log.h"
+#include "libavutil/time.h"
 #include "ijkws.h"
 
 /* 签名以 FFToolChain/patches/ffmpeg-n4.0/0010-tcp-hook.patch 为准 */
@@ -32,6 +33,7 @@ int ijkws_resolve(const char *host, int port, char *ip, size_t ip_size,
 {
     struct addrinfo hints, *res = NULL;
     char portstr[16];
+    int64_t start, elapsed;
     int ret;
 
     memset(&hints, 0, sizeof(hints));
@@ -40,14 +42,28 @@ int ijkws_resolve(const char *host, int port, char *ip, size_t ip_size,
     hints.ai_flags   |= AI_ADDRCONFIG;  /* 只返回本机有对应地址族的结果（无 IPv6 时不给 AAAA） */
     snprintf(portstr, sizeof(portstr), "%d", port);
 
+    /* timeout <= 0 会让 ijk_tcp_getaddrinfo_nonblock 走阻塞 getaddrinfo（不可打断），至少给 1us */
+    if (timeout_us < 1)
+        timeout_us = 1;
+
+    start = av_gettime_relative();
     ret = ijk_tcp_getaddrinfo_nonblock(host, portstr, &hints, &res, timeout_us, int_cb, 0);
+    elapsed = av_gettime_relative() - start;
     if (ret != 0 || !res) {
         if (res)
             freeaddrinfo(res);
         if (interrupted(int_cb))
             return AVERROR_EXIT;
         if (ret == AVERROR_EXIT) {
-            /* 未被打断却返回 EXIT，说明是解析超时 */
+            /*
+             * one_by_one=0 时补丁里的 tcp_getaddrinfo_worker 丢弃 getaddrinfo 返回值，
+             * last_error 恒为 0：解析失败（域名不存在等）和超时都返回 AVERROR_EXIT。
+             * 未被打断、且未到超时就返回 → 解析失败；到了超时 → 真超时。
+             */
+            if (elapsed < timeout_us) {
+                av_log(NULL, AV_LOG_ERROR, "ijkws: resolve %s failed\n", host);
+                return AVERROR(EIO);
+            }
             av_log(NULL, AV_LOG_ERROR, "ijkws: resolve %s timeout\n", host);
             return AVERROR(ETIMEDOUT);
         }
