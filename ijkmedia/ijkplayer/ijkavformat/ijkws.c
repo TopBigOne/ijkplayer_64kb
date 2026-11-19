@@ -54,6 +54,7 @@ struct IjkWsContext {
 
     char                   scheme[8];
     char                   host[256];
+    char                   host_hdr[272];   /* Host 头：host 或 host:port，IPv6 字面量加 [] */
     char                   ip[64];
     char                   path[4096];
     int                    port;
@@ -185,6 +186,20 @@ static int parse_url(IjkWsContext *ctx, const char *url)
         port = av_strcasecmp(ctx->scheme, "wss") ? 80 : 443;
     ctx->port = port;
 
+    /*
+     * Host 头（RFC 6455 §4.1 / RFC 7230 §5.4）：默认端口只写主机名，否则写 host:port；
+     * IPv6 字面量（av_url_split 已去掉方括号）需要重新加上 []。
+     * wss 的 SNI 也取自 connect_info.host，lws 会在第一个 ':' 处截断，因此 SNI 仍是裸主机名。
+     */
+    {
+        int is_default = port == (av_strcasecmp(ctx->scheme, "wss") ? 80 : 443);
+        int is_ipv6 = strchr(ctx->host, ':') != NULL;
+        if (is_default)
+            snprintf(ctx->host_hdr, sizeof(ctx->host_hdr), is_ipv6 ? "[%s]" : "%s", ctx->host);
+        else
+            snprintf(ctx->host_hdr, sizeof(ctx->host_hdr), is_ipv6 ? "[%s]:%d" : "%s:%d", ctx->host, port);
+    }
+
     /* av_url_split 给出的 path 已包含 query；为空或直接以 '?' 开头时补上 '/' */
     if (path[0] == '/')
         av_strlcpy(ctx->path, path, sizeof(ctx->path));
@@ -257,7 +272,7 @@ int ijkws_open(IjkWsContext **out, const char *url, AVDictionary **opts, const A
     ci.address  = ctx->ip;     /* 已解析的 IP，lws 不再做 DNS */
     ci.port     = ctx->port;
     ci.path     = ctx->path;
-    ci.host     = ctx->host;   /* Host 头；wss 的 SNI 也取自这里 */
+    ci.host     = ctx->host_hdr; /* Host 头；wss 的 SNI 也取自这里（lws 去掉 :port） */
     ci.origin   = ctx->host;
     ci.protocol = NULL;
     ci.pwsi     = &ctx->wsi;

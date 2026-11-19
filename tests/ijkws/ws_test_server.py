@@ -29,6 +29,7 @@ args = None
 flv_data = b""
 log_fp = None
 conn_seq = 0
+sni_names = {}  # id(SSLObject) -> 客户端发来的 SNI
 
 
 def log_event(ev):
@@ -201,6 +202,7 @@ async def handle_conn(reader, writer):
     log_event({"event": "connect", "conn": cid, "request_line": request_line,
                "path": path, "query": query, "headers": headers,
                "tls": writer.get_extra_info("sslcontext") is not None,
+               "sni": sni_names.pop(id(writer.get_extra_info("ssl_object")), None),
                "local_port": sockname[1] if sockname else None})
 
     try:
@@ -243,6 +245,7 @@ async def main():
     if args.tls_port:
         sctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         sctx.load_cert_chain(args.cert, args.key)
+        sctx.sni_callback = lambda sslobj, name, c: sni_names.__setitem__(id(sslobj), name)
         servers.append(await asyncio.start_server(handle_conn, ["127.0.0.1", "::1"], args.tls_port, ssl=sctx))
     if args.ready_file:
         with open(args.ready_file, "w") as f:
