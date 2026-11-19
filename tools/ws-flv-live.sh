@@ -21,9 +21,25 @@ NAMES=(srs ffmpeg relay)
 
 pidfile() { echo "$LIVE/$1.pid"; }
 
+# 进程是否真是我们起的：pid 存活且命令行匹配（防 pid 复用后误杀无关进程）
+pid_is_ours() {  # name pid
+    local args
+    args="$(ps -o args= -p "$2" 2>/dev/null)" || return 1
+    case "$1" in
+        srs)    [[ "$args" == "$SRS_BIN"* ]] ;;
+        ffmpeg) [[ "$args" == "$FF "* && "$args" == *"rtmp://127.0.0.1:$RTMP_PORT/live/test"* ]] ;;
+        relay)  [[ "$args" == *python* && "$args" == *ws_test_server.py* ]] ;;
+    esac
+}
+
 is_running() {
-    local f; f="$(pidfile "$1")"
-    [ -f "$f" ] && kill -0 "$(cat "$f")" 2>/dev/null
+    local f pid; f="$(pidfile "$1")"
+    [ -f "$f" ] || return 1
+    pid="$(cat "$f")"
+    if pid_is_ours "$1" "$pid"; then return 0; fi
+    echo "note: stale pid file for $1 (pid $pid is not ours), removing" >&2
+    rm -f "$f"
+    return 1
 }
 
 port_listening() { lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
@@ -47,7 +63,9 @@ cmd_stop() {
         local f; f="$(pidfile "$n")"
         [ -f "$f" ] || continue
         pid="$(cat "$f")"
-        if kill -0 "$pid" 2>/dev/null; then
+        if ! pid_is_ours "$n" "$pid"; then
+            echo "note: stale pid file for $n (pid $pid is not ours), removed without killing" >&2
+        elif kill -0 "$pid" 2>/dev/null; then
             kill "$pid" 2>/dev/null
             for i in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
             kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null

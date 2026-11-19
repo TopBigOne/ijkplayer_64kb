@@ -250,18 +250,23 @@ async def relay_open_upstream(path_q):
     host = u.hostname
     port = u.port or 80
     r, w = await asyncio.wait_for(asyncio.open_connection(host, port), 5)
-    w.write(("GET %s HTTP/1.1\r\nHost: %s\r\nAccept: */*\r\nConnection: close\r\n\r\n"
-             % (path_q, u.netloc)).encode())
-    await w.drain()
-    raw = await asyncio.wait_for(r.readuntil(b"\r\n\r\n"), args.relay_header_timeout)
-    lines = raw.decode("latin-1").split("\r\n")
-    status = int(lines[0].split(" ")[1])
-    hdrs = {}
-    for ln in lines[1:]:
-        k, _, v = ln.partition(":")
-        if k:
-            hdrs[k.strip().lower()] = v.strip()
-    chunked = "chunked" in hdrs.get("transfer-encoding", "").lower()
+    try:
+        w.write(("GET %s HTTP/1.1\r\nHost: %s\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+                 % (path_q, u.netloc)).encode())
+        await w.drain()
+        raw = await asyncio.wait_for(r.readuntil(b"\r\n\r\n"), args.relay_header_timeout)
+        lines = raw.decode("latin-1").split("\r\n")
+        status = int(lines[0].split(" ")[1])
+        hdrs = {}
+        for ln in lines[1:]:
+            k, _, v = ln.partition(":")
+            if k:
+                hdrs[k.strip().lower()] = v.strip()
+        chunked = "chunked" in hdrs.get("transfer-encoding", "").lower()
+    except BaseException:
+        w.close()
+        raise
+
     return status, r, w, chunked
 
 async def relay_body(reader, chunked):
