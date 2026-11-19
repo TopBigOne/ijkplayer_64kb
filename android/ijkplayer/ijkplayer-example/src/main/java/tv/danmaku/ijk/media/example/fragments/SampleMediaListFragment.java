@@ -130,6 +130,8 @@ public class SampleMediaListFragment extends Fragment {
                 "}";
 
         //mAdapter.addItem(manifest_string, "las test");
+        mAdapter.addItem("ws://127.0.0.1:18780/live/test.flv", "ws-flv local");
+        mAdapter.addItem("wss://127.0.0.1:18781/live/test.flv", "wss-flv local");
         mAdapter.addItem("http://10.18.17.49/samba/video/4.mp4","4.mp4");
         mAdapter.addItem("http://devimages.apple.com.edgekey.net/streaming/examples/bipbop_4x3/bipbop_4x3_variant.m3u8", "bipbop basic master playlist");
         mAdapter.addItem("http://devimages.apple.com.edgekey.net/streaming/examples/bipbop_4x3/gear1/prog_index.m3u8", "bipbop basic 400x300 @ 232 kbps");

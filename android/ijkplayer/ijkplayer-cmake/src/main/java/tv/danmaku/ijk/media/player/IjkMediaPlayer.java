@@ -187,6 +187,7 @@ public final class IjkMediaPlayer extends AbstractMediaPlayer {
                 if (libLoader == null)
                     libLoader = sLocalLibLoader;
 
+                libLoader.loadLibrary("websockets");
                 libLoader.loadLibrary("ijkplayer");
                 mIsLibLoaded = true;
             }
