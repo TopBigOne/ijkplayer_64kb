@@ -29,7 +29,10 @@ fi
 PASS=0
 FAIL=0
 for t in "${TESTS[@]}"; do
-    if ! build_c "$t"; then
+    # 测试源码里形如 " * IJKWS_TEST_CFLAGS: -DFOO=1" 的一行给出额外编译参数（作用于整个测试程序，含 ijkws.c）
+    extra=$(sed -n 's/^ \* IJKWS_TEST_CFLAGS: //p' "$HERE/$t.c")
+    # shellcheck disable=SC2086
+    if ! build_c "$t" $extra; then
         echo "[BUILD FAIL] $t"
         FAIL=$((FAIL + 1))
     fi

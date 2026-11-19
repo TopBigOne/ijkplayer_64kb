@@ -30,10 +30,24 @@
 #include "ijkws_buf.h"
 
 #define IJKWS_WAKE_INTERVAL_MS   100
+/* ijkws_close 里优雅关闭（发 close 帧、等对端回应）的时间上限，以及这期间的唤醒间隔 */
+#define IJKWS_CLOSE_WAIT_MS      100
+#define IJKWS_CLOSE_WAKE_MS      10
 #define IJKWS_DEFAULT_TIMEOUT_MS 10000
 #define IJKWS_BUF_INITIAL        (256 * 1024)
 /* 每个 lws_context 只有一条连接；限制 fd 表大小，避免按进程 ulimit 分配大数组 */
 #define IJKWS_FD_LIMIT           8
+/*
+ * 接收背压：缓冲超过高水位时暂停接收（lws_rx_flow_control），read 取走数据后低于低水位再恢复。
+ * service 只在 read 等数据时驱动，正常情况下缓冲不会涨到高水位，这里只是保护。
+ * 允许编译时覆盖，仅供主机测试用小水位验证暂停/恢复路径。
+ */
+#ifndef IJKWS_RX_HIGH_WATER
+#define IJKWS_RX_HIGH_WATER      (4 * 1024 * 1024)
+#endif
+#ifndef IJKWS_RX_LOW_WATER
+#define IJKWS_RX_LOW_WATER       (1 * 1024 * 1024)
+#endif
 
 enum {
     IJKWS_STATE_CONNECTING = 0,
@@ -53,7 +67,10 @@ struct IjkWsContext {
     int                    state;
     int                    error;
     int                    peer_closed;
-    int                    closing;     /* ijkws_close 中，不再输出断线日志 */
+    int                    closing;     /* ijkws_close 中，不再输出断线日志、不再缓存数据 */
+    int                    close_pending; /* 下一次 WRITEABLE 回调返回 -1，由 lws 发 close 帧 */
+    int                    rx_paused;   /* 已 lws_rx_flow_control(wsi, 0) */
+    int                    wake_ms;     /* wake_sul 的周期 */
 
     int                    timeout_ms;  /* ws_timeout：连接+握手超时，也是读取期间无数据的超时 */
     int64_t                last_rx_us;  /* 最近一次收到数据（或握手成功）的时间，av_gettime_relative */
@@ -87,7 +104,7 @@ static void wake_cb(lws_sorted_usec_list_t *sul)
 {
     IjkWsContext *ctx = lws_container_of(sul, IjkWsContext, wake_sul);
     lws_sul_schedule(ctx->lws, 0, &ctx->wake_sul, wake_cb,
-                     IJKWS_WAKE_INTERVAL_MS * LWS_US_PER_MS);
+                     (lws_usec_t)ctx->wake_ms * LWS_US_PER_MS);
 }
 
 static void set_error(IjkWsContext *ctx, int err)
@@ -150,10 +167,34 @@ static int ws_callback(struct lws *wsi, enum lws_callback_reasons reason,
     }
 
     case LWS_CALLBACK_CLIENT_RECEIVE:
+        if (ctx->closing)
+            break;   /* 正在关闭，数据已没人读 */
         ctx->last_rx_us = av_gettime_relative();
         if (len > 0 && ijkws_buf_write(ctx->buf, (const uint8_t *)in, len) < 0) {
             av_log(NULL, AV_LOG_ERROR, "ijkws: out of memory buffering %zu bytes\n", len);
             set_error(ctx, AVERROR(ENOMEM));
+            return -1;
+        }
+        if (!ctx->rx_paused && ijkws_buf_size(ctx->buf) > IJKWS_RX_HIGH_WATER) {
+            /* 回调内调用时 lws 在本次回调返回后生效，余下已读入的数据由 lws 暂存 */
+            av_log(NULL, AV_LOG_VERBOSE, "ijkws: buffered %zu bytes, pause receiving\n",
+                   ijkws_buf_size(ctx->buf));
+            ctx->rx_paused = 1;
+            lws_rx_flow_control(wsi, 0);
+        }
+        break;
+
+    case LWS_CALLBACK_CLIENT_WRITEABLE:
+        /*
+         * 只有 ijkws_close 会请求可写回调。返回 -1 让 lws 关闭 wsi：由于之前用
+         * lws_close_reason 设置了关闭码，rops_close_via_role_protocol_ws 会进入
+         * LRS_WAITING_TO_SEND_CLOSE，发出 close 帧后进入 LRS_AWAITING_CLOSE_ACK 等对端回应。
+         * 只能返回一次 -1：发完 close 帧后 lws 还会再给一次 WRITEABLE，此时再返回 -1，
+         * __lws_close_free_wsi 会认为“已经礼貌关闭过”直接断 TCP，不再等对端回应；
+         * 若本地还有未读数据，断开会发 RST，对端可能连 close 帧都来不及读到。
+         */
+        if (ctx->close_pending) {
+            ctx->close_pending = 0;
             return -1;
         }
         break;
@@ -196,6 +237,15 @@ static const struct lws_protocols ws_protocols[] = {
 static int check_interrupt(const IjkWsContext *ctx)
 {
     return ctx->int_cb.callback && ctx->int_cb.callback(ctx->int_cb.opaque);
+}
+
+/* 缓冲已降到低水位以下时恢复接收 */
+static void maybe_resume_rx(IjkWsContext *ctx)
+{
+    if (ctx->rx_paused && ctx->wsi && ijkws_buf_size(ctx->buf) < IJKWS_RX_LOW_WATER) {
+        ctx->rx_paused = 0;
+        lws_rx_flow_control(ctx->wsi, 1);
+    }
 }
 
 /* 跑一轮 service；lws 自身出错时把连接标记为 EIO */
@@ -290,6 +340,7 @@ int ijkws_open(IjkWsContext **out, const char *url, AVDictionary **opts, const A
         return AVERROR(ENOMEM);
     if (int_cb)
         ctx->int_cb = *int_cb;
+    ctx->wake_ms = IJKWS_WAKE_INTERVAL_MS;
 
     parse_options(ctx, opts);
     /* 连接超时从 open 开始计时，覆盖 DNS、TCP、TLS 和 WebSocket 握手 */
@@ -334,7 +385,7 @@ int ijkws_open(IjkWsContext **out, const char *url, AVDictionary **opts, const A
         goto fail;
     }
     lws_sul_schedule(ctx->lws, 0, &ctx->wake_sul, wake_cb,
-                     IJKWS_WAKE_INTERVAL_MS * LWS_US_PER_MS);
+                     (lws_usec_t)ctx->wake_ms * LWS_US_PER_MS);
 
     memset(&ci, 0, sizeof(ci));
     ci.context  = ctx->lws;
@@ -405,8 +456,11 @@ int ijkws_read(void *opaque, uint8_t *buf, int size)
      */
     wait_start_us = av_gettime_relative();
     for (;;) {
-        if (ijkws_buf_size(ctx->buf) > 0)
-            return (int)ijkws_buf_read(ctx->buf, buf, (size_t)size);
+        if (ijkws_buf_size(ctx->buf) > 0) {
+            int n = (int)ijkws_buf_read(ctx->buf, buf, (size_t)size);
+            maybe_resume_rx(ctx);
+            return n;
+        }
         if (ctx->state == IJKWS_STATE_ERROR)
             return ctx->error ? ctx->error : AVERROR(EIO);
         if (ctx->state == IJKWS_STATE_EOF)
@@ -419,8 +473,42 @@ int ijkws_read(void *opaque, uint8_t *buf, int size)
             av_log(NULL, AV_LOG_ERROR, "ijkws: no data for %d ms, read timeout\n", ctx->timeout_ms);
             return AVERROR(ETIMEDOUT);
         }
+        maybe_resume_rx(ctx);
         service_once(ctx);
     }
+}
+
+/*
+ * 优雅关闭：发 close 帧（1000），再 service 到对端回应（CLIENT_CLOSED）或满 IJKWS_CLOSE_WAIT_MS。
+ * lws_context_destroy 不发 close 帧（close.c：CONTEXT_DESTROY 直接 just_kill_connection），
+ * 所以要先走这一步，让服务端及时回收会话。
+ */
+static void graceful_close(IjkWsContext *ctx)
+{
+    int64_t deadline_us;
+
+    if (!ctx->lws || !ctx->wsi || ctx->state != IJKWS_STATE_ESTABLISHED)
+        return;
+
+    /* 暂停接收时收不到对端的 close 回应 */
+    if (ctx->rx_paused) {
+        ctx->rx_paused = 0;
+        lws_rx_flow_control(ctx->wsi, 1);
+    }
+    lws_close_reason(ctx->wsi, LWS_CLOSE_STATUS_NORMAL, NULL, 0);
+    ctx->close_pending = 1;
+    lws_callback_on_writable(ctx->wsi);
+
+    /* 缩短唤醒周期，保证最后一轮 service 不会越过上限太多 */
+    ctx->wake_ms = IJKWS_CLOSE_WAKE_MS;
+    lws_sul_schedule(ctx->lws, 0, &ctx->wake_sul, wake_cb,
+                     (lws_usec_t)ctx->wake_ms * LWS_US_PER_MS);
+
+    deadline_us = av_gettime_relative() + IJKWS_CLOSE_WAIT_MS * 1000;
+    while (ctx->wsi && av_gettime_relative() < deadline_us)
+        service_once(ctx);
+    if (ctx->wsi)
+        av_log(NULL, AV_LOG_VERBOSE, "ijkws: no close reply within %d ms\n", IJKWS_CLOSE_WAIT_MS);
 }
 
 void ijkws_close(IjkWsContext **pctx)
@@ -432,6 +520,7 @@ void ijkws_close(IjkWsContext **pctx)
     ctx = *pctx;
 
     ctx->closing = 1;
+    graceful_close(ctx);
     if (ctx->lws) {
         lws_sul_cancel(&ctx->wake_sul);
         lws_context_destroy(ctx->lws);

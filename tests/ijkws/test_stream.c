@@ -47,7 +47,21 @@ static void test_wss_self_signed_default_ok(void)     { stream_expect_flv(WSS_BA
 static void test_chunked_messages_bytes_equal(void)   { stream_expect_flv(WS_BASE "/chunked"); }
 static void test_fragmented_messages_bytes_equal(void){ stream_expect_flv(WS_BASE "/fragmented"); }
 static void test_text_frames_accepted(void)           { stream_expect_flv(WS_BASE "/text"); }
-static void test_ping_interleaved_bytes_equal(void)   { stream_expect_flv(WS_BASE "/ping"); }
+
+/* 服务器穿插 ping：数据不受影响，且客户端回了 pong */
+static void test_ping_interleaved_bytes_equal(void)
+{
+    char url[256], query[64], line[4096];
+    int conn;
+    snprintf(query, sizeof(query), "ping=%lld", (long long)now_ms());
+    snprintf(url, sizeof(url), WS_BASE "/ping?%s", query);
+    stream_expect_flv(url);
+    if (g_test_cur_failed)
+        return;
+    conn = log_conn_for_query(query);
+    CHECK(conn > 0);
+    CHECK(log_wait_event(conn, "pong_received", 1000, line, sizeof(line)));
+}
 
 static void test_large_message_1mb(void)
 {

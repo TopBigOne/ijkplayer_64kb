@@ -155,4 +155,57 @@ static inline void interrupt_after_ms(volatile int *flag, int ms)
     pthread_detach(th);
 }
 
+/* ---------------------------------------------------------------- 服务器日志（JSONL） */
+
+/* 找 query 等于 query 的 connect 事件，返回其连接号；找不到返回 -1 */
+static inline int log_conn_for_query(const char *query)
+{
+    const char *path = getenv("IJKWS_TEST_LOG");
+    char key[256], line[16384];
+    const char *p;
+    FILE *f;
+    int conn = -1;
+    if (!path || !(f = fopen(path, "r")))
+        return -1;
+    snprintf(key, sizeof(key), "\"query\": \"%s\"", query);
+    while (fgets(line, sizeof(line), f)) {
+        if (strstr(line, "\"event\": \"connect\"") && strstr(line, key) &&
+            (p = strstr(line, "\"conn\": "))) {
+            conn = atoi(p + 8);
+            break;
+        }
+    }
+    fclose(f);
+    return conn;
+}
+
+/*
+ * 等待连接 conn 的 event 事件出现在日志里（服务器异步写日志，所以要轮询），
+ * 找到时把该行复制到 line 并返回 1；timeout_ms 内没出现返回 0。
+ */
+static inline int log_wait_event(int conn, const char *event, int timeout_ms, char *line, size_t size)
+{
+    const char *path = getenv("IJKWS_TEST_LOG");
+    char ekey[128], ckey[64], buf[16384];
+    int64_t deadline = now_ms() + timeout_ms;
+    snprintf(ekey, sizeof(ekey), "\"event\": \"%s\"", event);
+    snprintf(ckey, sizeof(ckey), "\"conn\": %d,", conn);
+    for (;;) {
+        FILE *f = path ? fopen(path, "r") : NULL;
+        if (f) {
+            while (fgets(buf, sizeof(buf), f)) {
+                if (strstr(buf, ekey) && strstr(buf, ckey)) {
+                    fclose(f);
+                    snprintf(line, size, "%s", buf);
+                    return 1;
+                }
+            }
+            fclose(f);
+        }
+        if (now_ms() >= deadline)
+            return 0;
+        usleep(20 * 1000);
+    }
+}
+
 #endif

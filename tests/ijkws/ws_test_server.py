@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """ijkws 主机测试用的最小 WebSocket 服务器（只用标准库）。
 
-按 path 选择行为，详见 BEHAVIORS / handle_conn。每个连接的请求行、握手 Header、
-收到的 close 码和连接结束时间以 JSONL 形式写入 --log。
+按 path 选择行为，详见 behave / handle_conn。每个连接的请求行、握手 Header、
+收到的 pong / close 帧（含 close 码、是否带掩码）和连接结束时间以 JSONL 形式写入 --log。
 """
 import argparse
 import asyncio
@@ -78,7 +78,7 @@ class Conn:
         await self.send(frame(OP_CLOSE, struct.pack("!H", code) + reason))
 
     async def read_loop(self):
-        """解析客户端（带掩码的）帧：回 pong，记录 close 码。"""
+        """解析客户端（带掩码的）帧：回 pong；记录收到的 pong、close 码以及帧是否带掩码。"""
         try:
             while True:
                 h = await self.reader.readexactly(2)
@@ -95,10 +95,15 @@ class Conn:
                     data[i] ^= mask[i & 3]
                 if opcode == OP_PING:
                     await self.send(frame(OP_PONG, bytes(data)))
+                elif opcode == OP_PONG:
+                    log_event({"event": "pong_received", "conn": self.cid,
+                               "masked": bool(masked), "len": n})
                 elif opcode == OP_CLOSE:
                     code = struct.unpack("!H", data[:2])[0] if n >= 2 else None
+                    # RFC 6455 §5.3：客户端发出的帧必须带掩码
                     log_event({"event": "close_received", "conn": self.cid,
-                               "code": code, "reason": bytes(data[2:]).decode("utf-8", "replace")})
+                               "code": code, "masked": bool(masked),
+                               "reason": bytes(data[2:]).decode("utf-8", "replace")})
                     self.peer_closed.set()
                     if self.path == "/close-silent":
                         continue  # 不回复，也不断开
