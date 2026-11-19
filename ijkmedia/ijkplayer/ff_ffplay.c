@@ -985,6 +985,19 @@ static void stream_component_close(FFPlayer *ffp, int stream_index)
     }
 }
 
+/*
+ * ws 自定义 AVIO 的 read_packet。ijk 的 FFmpeg 4.0（FFToolChain patch 0005-avio-cache-about）
+ * 改了 aviobuf.c：fill_buffer / avio_read 把 read_packet 返回 0 当作 EOF，返回任何负值
+ * （包括 AVERROR_EOF）都写进 pb->error；read_thread 看到 pb->error 就上报 FFP_MSG_ERROR。
+ * http 等 URL 协议由补丁后的 retry_transfer_wrapper 把 AVERROR_EOF 转成 0，这里对齐：
+ * 正常结束（收到 close 帧）返回 0 走播放完成；EIO / ETIMEDOUT / EXIT 原样返回，仍按错误上报。
+ */
+static int ws_avio_read(void *opaque, uint8_t *buf, int size)
+{
+    int ret = ijkws_read(opaque, buf, size);
+    return ret == AVERROR_EOF ? 0 : ret;
+}
+
 /* 释放 ws 自定义 AVIO 和 ijkws 实例。必须在 avformat_close_input 之后调用
  * （AVFMT_FLAG_CUSTOM_IO 时 FFmpeg 不释放 pb）。可重复调用 */
 static void ws_release(VideoState *is)
@@ -3142,7 +3155,7 @@ static int read_thread(void *arg)
             ret = -1;
             goto fail;
         }
-        is->ws_avio = avio_alloc_context(ws_buf, 32768, 0, is->ws, ijkws_read, NULL, NULL);
+        is->ws_avio = avio_alloc_context(ws_buf, 32768, 0, is->ws, ws_avio_read, NULL, NULL);
         if (!is->ws_avio) {
             av_free(ws_buf);
             last_error = AVERROR(ENOMEM);
@@ -3547,7 +3560,10 @@ static int read_thread(void *arg)
                     toggle_pause(ffp, 1);
                     if (ffp->error) {
                         av_log(ffp, AV_LOG_INFO, "ffp_toggle_buffering: error: %d\n", ffp->error);
-                        ffp_notify_msg1(ffp, FFP_MSG_ERROR);
+                        if (is->ws)  /* ws：带上真实错误码（EIO / ETIMEDOUT），其他协议保持原行为 */
+                            ffp_notify_msg2(ffp, FFP_MSG_ERROR, ffp->error);
+                        else
+                            ffp_notify_msg1(ffp, FFP_MSG_ERROR);
                     } else {
                         av_log(ffp, AV_LOG_INFO, "ffp_toggle_buffering: completed: OK\n");
                         ffp_notify_msg1(ffp, FFP_MSG_COMPLETED);
