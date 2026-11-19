@@ -378,7 +378,17 @@ async def main():
     if args.port and args.tls_port:
         sctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         sctx.load_cert_chain(args.cert, args.key)
-        sctx.sni_callback = lambda sslobj, name, c: sni_names.__setitem__(id(sslobj), name)
+        ip_ctx = None
+        if args.ip_cert and args.ip_key:
+            ip_ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+            ip_ctx.load_cert_chain(args.ip_cert, args.ip_key)
+
+        def on_sni(sslobj, name, c):
+            # 记录 SNI；客户端没带 SNI（如 IP 字面量）时改出示 --ip-cert
+            sni_names[id(sslobj)] = name
+            if name is None and ip_ctx is not None:
+                sslobj.context = ip_ctx
+        sctx.sni_callback = on_sni
         servers.append(await asyncio.start_server(handle_conn, ["127.0.0.1", "::1"], args.tls_port, ssl=sctx))
     if args.relay_http_base:
         servers.append(await asyncio.start_server(handle_relay_conn, "0.0.0.0", args.relay_port))
@@ -398,6 +408,8 @@ if __name__ == "__main__":
     ap.add_argument("--tls-port", type=int)
     ap.add_argument("--cert")
     ap.add_argument("--key")
+    ap.add_argument("--ip-cert", help="客户端不带 SNI 时出示的证书（测试 IP 字面量的证书校验）")
+    ap.add_argument("--ip-key")
     ap.add_argument("--flv")
     ap.add_argument("--log", required=True)
     ap.add_argument("--ready-file")

@@ -15,8 +15,9 @@ if [ ! -f "$BUILD/test.flv" ]; then
         -c:v flv -c:a aac -f flv "$BUILD/test.flv" || exit 1
 fi
 
-# 自签名证书（CN/SAN = localhost）和一张无关的 CA
+# 自签名证书（CN/SAN = localhost；另一张只含 IP:::1，无 SNI 时出示）和一张无关的 CA
 ensure_server_cert || exit 1
+ensure_server_ip_cert || exit 1
 ensure_other_ca || exit 1
 
 if [ $# -gt 0 ]; then
@@ -46,6 +47,7 @@ READY="$BUILD/server.ready"
 rm -f "$READY"
 python3 "$HERE/ws_test_server.py" --port $WS_PORT --tls-port $WSS_PORT \
     --cert "$BUILD/server.crt" --key "$BUILD/server.key" \
+    --ip-cert "$BUILD/server-ip.crt" --ip-key "$BUILD/server-ip.key" \
     --flv "$BUILD/test.flv" --log "$LOG" --ready-file "$READY" 2>"$BUILD/server.stderr" &
 SERVER_PID=$!
 trap 'kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null' EXIT

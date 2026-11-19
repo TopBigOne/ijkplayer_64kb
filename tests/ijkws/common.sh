@@ -29,6 +29,16 @@ ensure_server_cert() {
     fi
 }
 
+# 只含 IP:::1 的自签名证书：客户端不带 SNI（IP 字面量）时测试服务器出示它
+ensure_server_ip_cert() {
+    mkdir -p "$BUILD"
+    if [ ! -f "$BUILD/server-ip.crt" ]; then
+        openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+            -keyout "$BUILD/server-ip.key" -out "$BUILD/server-ip.crt" \
+            -subj "/CN=ijkws-ip" -addext "subjectAltName=IP:::1" >/dev/null 2>&1 || return 1
+    fi
+}
+
 ensure_other_ca() {
     if [ ! -f "$BUILD/other-ca.crt" ]; then
         openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \

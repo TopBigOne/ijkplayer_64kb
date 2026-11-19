@@ -11,13 +11,20 @@
  */
 #include "ijkws.h"
 
+#include <arpa/inet.h>
 #include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <libwebsockets.h>
+#if defined(LWS_OPENSSL_SUPPORT) && !defined(LWS_WITH_MBEDTLS)
+#include <openssl/ssl.h>
+#include <openssl/x509_vfy.h>
+#define IJKWS_HAVE_OPENSSL 1
+#endif
 
 #include "libavformat/avformat.h"
 #include "libavutil/avstring.h"
@@ -35,6 +42,11 @@
 #define IJKWS_CLOSE_WAKE_MS      10
 #define IJKWS_DEFAULT_TIMEOUT_MS 10000
 #define IJKWS_BUF_INITIAL        (256 * 1024)
+/*
+ * lws 每线程的收发缓冲；握手请求（请求行 + 全部 Header）在其中拼装，默认 4096 放不下
+ * 带长 token 的 URL 加上 ws_headers，因此放大。
+ */
+#define IJKWS_SERV_BUF_SIZE      (16 * 1024)
 /* 每个 lws_context 只有一条连接；限制 fd 表大小，避免按进程 ulimit 分配大数组 */
 #define IJKWS_FD_LIMIT           8
 /*
@@ -81,6 +93,16 @@ struct IjkWsContext {
     char                   ip[64];
     char                   path[4096];
     int                    port;
+    int                    host_is_ip;  /* URL 主机是 IPv4/IPv6 字面量 */
+
+    /* 握手选项（ws_headers / user_agent / ws_origin / ws_protocol），未给出时为 NULL */
+    char                  *headers;
+    char                  *user_agent;
+    char                  *origin;
+    char                  *protocol;
+    /* ws_tls_verify / ws_ca_file */
+    int                    tls_verify;
+    char                  *ca_file;
 };
 
 /* ---------------------------------------------------------------- 日志 */
@@ -131,6 +153,80 @@ static int http_status_to_averror(unsigned int status)
     return AVERROR(EIO);
 }
 
+/* 往握手请求追加一行 "name: value\r\n"（name 为 NULL 时 value 已是完整的一行）；空间不够返回 -1 */
+static int append_header(char **p, char *end, const char *name, const char *value, size_t value_len)
+{
+    int n;
+    if (name)
+        n = snprintf(*p, (size_t)(end - *p), "%s: %.*s\r\n", name, (int)value_len, value);
+    else
+        n = snprintf(*p, (size_t)(end - *p), "%.*s\r\n", (int)value_len, value);
+    if (n < 0 || n >= end - *p)
+        return -1;
+    *p += n;
+    return 0;
+}
+
+/*
+ * LWS_CALLBACK_CLIENT_APPEND_HANDSHAKE_HEADER：追加 User-Agent 和 ws_headers。
+ * ws_headers 按 "\r\n"（也接受单独的 "\n"）分行，跳过空行；没有 ':' 的行在 parse_options 里已被拒绝。
+ */
+static int append_handshake_headers(IjkWsContext *ctx, char **p, size_t len)
+{
+    char *end = *p + len;
+    const char *s;
+
+    if (ctx->user_agent && append_header(p, end, "User-Agent", ctx->user_agent, strlen(ctx->user_agent)) < 0)
+        goto overflow;
+    for (s = ctx->headers; s && *s; ) {
+        size_t n = strcspn(s, "\r\n");
+        if (n > 0 && append_header(p, end, NULL, s, n) < 0)
+            goto overflow;
+        s += n;
+        s += strspn(s, "\r\n");
+    }
+    return 0;
+
+overflow:
+    av_log(NULL, AV_LOG_ERROR, "ijkws: handshake headers too long (limit %d bytes)\n", IJKWS_SERV_BUF_SIZE);
+    return -1;
+}
+
+#ifdef IJKWS_HAVE_OPENSSL
+/*
+ * IP 字面量的 wss（只在 ctx->host_is_ip 时注册 SSL_CB_HANDSHAKE_START）。
+ *
+ * lws 用 connect_info.host（即 Host 头，"[v6]:port" / "v4:port"）在第一个 ':' 处截断后，
+ * 无条件 SSL_set_tlsext_host_name，并在需要校验主机名时先试 X509_VERIFY_PARAM_set1_ip_asc、
+ * 失败再按 DNS 名校验（lib/tls/openssl/openssl-client.c lws_ssl_client_bio_create）。
+ * 结果：IPv4 会发出 SNI "1.2.3.4"，IPv6 会发出 SNI "["、并拿 "[" 当主机名校验。
+ * lws v4.3 没有单独设置 SNI 的字段或标志，因此在握手开始（ClientHello 生成之前）修正：
+ *   - 清掉 SNI：RFC 6066 §3 规定 SNI 不能是 IP 字面量；
+ *   - 校验模式下把主机名校验换成对 URL 中 IP 的校验（证书 SAN 的 iPAddress）。
+ */
+static int fix_tls_for_ip_literal(IjkWsContext *ctx, struct lws *wsi)
+{
+    SSL *ssl = lws_get_ssl(wsi);
+
+    if (!ssl)
+        return 0;
+    SSL_set_tlsext_host_name(ssl, NULL);
+    if (ctx->tls_verify) {
+        X509_VERIFY_PARAM *param = SSL_get0_param(ssl);
+        /*
+         * 先设 IP、成功后再清掉 lws 设的主机名：失败时保留原来的（必然不匹配的）主机名校验，
+         * 这样在 lws 异步断开之前，握手也不会在没有任何名称约束的情况下通过。
+         */
+        if (!X509_VERIFY_PARAM_set1_ip_asc(param, ctx->host)) {
+            av_log(NULL, AV_LOG_ERROR, "ijkws: cannot verify certificate against IP %s\n", ctx->host);
+            return -1;
+        }
+        X509_VERIFY_PARAM_set1_host(param, NULL, 0);
+    }
+    return 0;
+}
+#endif
+
 static int ws_callback(struct lws *wsi, enum lws_callback_reasons reason,
                        void *user, void *in, size_t len)
 {
@@ -140,6 +236,18 @@ static int ws_callback(struct lws *wsi, enum lws_callback_reasons reason,
         return 0;
 
     switch (reason) {
+    case LWS_CALLBACK_CLIENT_APPEND_HANDSHAKE_HEADER:
+        return append_handshake_headers(ctx, (char **)in, len);
+
+#ifdef IJKWS_HAVE_OPENSSL
+    case LWS_CALLBACK_SSL_INFO: {
+        const struct lws_ssl_info *si = (const struct lws_ssl_info *)in;
+        if (ctx->host_is_ip && si && (si->where & SSL_CB_HANDSHAKE_START))
+            return fix_tls_for_ip_literal(ctx, wsi);
+        break;
+    }
+#endif
+
     case LWS_CALLBACK_CLIENT_ESTABLISHED:
         ctx->state = IJKWS_STATE_ESTABLISHED;
         ctx->last_rx_us = av_gettime_relative();
@@ -255,25 +363,100 @@ static void service_once(IjkWsContext *ctx)
         set_error(ctx, AVERROR(EIO));
 }
 
-/* 读取并删除 ws_timeout（毫秒）；缺省或非法时用默认值 */
-static void parse_options(IjkWsContext *ctx, AVDictionary **opts)
+/*
+ * 把 opts 中 key 的值复制到 *dst（av_strdup，调用方释放；不存在时为 NULL），del 非 0 时从 opts 删除。
+ * 复制失败返回 AVERROR(ENOMEM)，此时也照样删除。
+ */
+static int take_option(AVDictionary **opts, const char *key, char **dst, int del)
 {
-    AVDictionaryEntry *e;
+    AVDictionaryEntry *e = av_dict_get(*opts, key, NULL, 0);
+    *dst = NULL;
+    if (!e)
+        return 0;
+    *dst = av_strdup(e->value);
+    if (del)
+        av_dict_set(opts, key, NULL, 0);
+    return *dst ? 0 : AVERROR(ENOMEM);
+}
+
+/* 握手 Header 的值不能含 CR/LF，否则可以注入任意 Header */
+static int has_crlf(const char *s)
+{
+    return s && strpbrk(s, "\r\n") != NULL;
+}
+
+/*
+ * 读取 ws_* 选项并从 opts 中删除（无论成功与否都删，避免 avformat_open_input 报 "Option not found"）；
+ * user_agent 与 FFmpeg http 共用，只读不删。
+ * 选项非法时返回 AVERROR(EINVAL)（ws_timeout / ws_tls_verify 非法只告警，用默认值）。
+ */
+static int parse_options(IjkWsContext *ctx, AVDictionary **opts)
+{
+    char *timeout = NULL, *verify = NULL;
+    int ret = 0;
 
     ctx->timeout_ms = IJKWS_DEFAULT_TIMEOUT_MS;
     if (!opts)
-        return;
-    e = av_dict_get(*opts, "ws_timeout", NULL, 0);
-    if (e) {
+        return 0;
+
+    /* 先全部取出（并删除），再校验：任何一步失败都不能把 ws_* 留在 opts 里 */
+    ret |= take_option(opts, "ws_timeout",    &timeout,         1);
+    ret |= take_option(opts, "ws_tls_verify", &verify,          1);
+    ret |= take_option(opts, "ws_headers",    &ctx->headers,    1);
+    ret |= take_option(opts, "ws_origin",     &ctx->origin,     1);
+    ret |= take_option(opts, "ws_protocol",   &ctx->protocol,   1);
+    ret |= take_option(opts, "ws_ca_file",    &ctx->ca_file,    1);
+    ret |= take_option(opts, "user_agent",    &ctx->user_agent, 0);
+    if (ret < 0) {
+        av_freep(&timeout);
+        av_freep(&verify);
+        return AVERROR(ENOMEM);
+    }
+
+    if (timeout) {
         char *end = NULL;
-        long v = strtol(e->value, &end, 10);
-        if (end && end != e->value && *end == '\0' && v > 0 && v <= INT32_MAX)
+        long v = strtol(timeout, &end, 10);
+        if (end && end != timeout && *end == '\0' && v > 0 && v <= INT32_MAX)
             ctx->timeout_ms = (int)v;
         else
             av_log(NULL, AV_LOG_WARNING, "ijkws: invalid ws_timeout '%s', using %d ms\n",
-                   e->value, IJKWS_DEFAULT_TIMEOUT_MS);
-        av_dict_set(opts, "ws_timeout", NULL, 0);
+                   timeout, IJKWS_DEFAULT_TIMEOUT_MS);
     }
+    if (verify) {
+        if (!strcmp(verify, "0") || !strcmp(verify, "1"))
+            ctx->tls_verify = verify[0] == '1';
+        else
+            av_log(NULL, AV_LOG_WARNING, "ijkws: invalid ws_tls_verify '%s', using 0\n", verify);
+    }
+    av_freep(&timeout);
+    av_freep(&verify);
+
+    /* 空字符串等同于未设置 */
+    if (ctx->headers && !ctx->headers[0])       av_freep(&ctx->headers);
+    if (ctx->user_agent && !ctx->user_agent[0]) av_freep(&ctx->user_agent);
+    if (ctx->origin && !ctx->origin[0])         av_freep(&ctx->origin);
+    if (ctx->protocol && !ctx->protocol[0])     av_freep(&ctx->protocol);
+    if (ctx->ca_file && !ctx->ca_file[0])       av_freep(&ctx->ca_file);
+
+    if (has_crlf(ctx->user_agent) || has_crlf(ctx->origin) || has_crlf(ctx->protocol)) {
+        av_log(NULL, AV_LOG_ERROR, "ijkws: user_agent / ws_origin / ws_protocol must not contain CR/LF\n");
+        ret = AVERROR(EINVAL);
+    }
+    if (ctx->headers) {
+        const char *s = ctx->headers;
+        while (*s) {
+            size_t n = strcspn(s, "\r\n");
+            const char *colon = memchr(s, ':', n);
+            if (n > 0 && (!colon || colon == s)) {
+                av_log(NULL, AV_LOG_ERROR, "ijkws: malformed ws_headers line '%.*s'\n", (int)n, s);
+                ret = AVERROR(EINVAL);
+                break;
+            }
+            s += n;
+            s += strspn(s, "\r\n");
+        }
+    }
+    return ret;
 }
 
 static int parse_url(IjkWsContext *ctx, const char *url)
@@ -297,11 +480,14 @@ static int parse_url(IjkWsContext *ctx, const char *url)
     /*
      * Host 头（RFC 6455 §4.1 / RFC 7230 §5.4）：默认端口只写主机名，否则写 host:port；
      * IPv6 字面量（av_url_split 已去掉方括号）需要重新加上 []。
-     * wss 的 SNI 也取自 connect_info.host，lws 会在第一个 ':' 处截断，因此 SNI 仍是裸主机名。
+     * wss 的 SNI 也取自 connect_info.host，lws 会在第一个 ':' 处截断：主机名时 SNI 是裸主机名；
+     * IP 字面量时由 fix_tls_for_ip_literal 去掉 SNI。
      */
     {
         int is_default = port == (av_strcasecmp(ctx->scheme, "wss") ? 80 : 443);
-        int is_ipv6 = strchr(ctx->host, ':') != NULL;
+        int is_ipv6 = strchr(ctx->host, ':') != NULL;   /* 主机名不可能含 ':' */
+        struct in_addr a4;
+        ctx->host_is_ip = is_ipv6 || inet_pton(AF_INET, ctx->host, &a4) == 1;
         if (is_default)
             snprintf(ctx->host_hdr, sizeof(ctx->host_hdr), is_ipv6 ? "[%s]" : "%s", ctx->host);
         else
@@ -342,7 +528,9 @@ int ijkws_open(IjkWsContext **out, const char *url, AVDictionary **opts, const A
         ctx->int_cb = *int_cb;
     ctx->wake_ms = IJKWS_WAKE_INTERVAL_MS;
 
-    parse_options(ctx, opts);
+    ret = parse_options(ctx, opts);
+    if (ret < 0)
+        goto fail;
     /* 连接超时从 open 开始计时，覆盖 DNS、TCP、TLS 和 WebSocket 握手 */
     deadline_us = av_gettime_relative() + (int64_t)ctx->timeout_ms * 1000;
 
@@ -352,6 +540,25 @@ int ijkws_open(IjkWsContext **out, const char *url, AVDictionary **opts, const A
         goto fail;
     }
     is_wss = !av_strcasecmp(ctx->scheme, "wss");
+
+    /*
+     * 证书校验只对 wss 有意义。设备上没有 OpenSSL 可用的系统 CA 文件，
+     * 所以校验模式必须由 App 提供 CA bundle；提前检查可读，给出明确的错误。
+     */
+    if (is_wss && ctx->tls_verify) {
+        if (!ctx->ca_file) {
+            av_log(NULL, AV_LOG_ERROR,
+                   "ijkws: ws_tls_verify=1 requires ws_ca_file (path to a PEM CA bundle)\n");
+            ret = AVERROR(EINVAL);
+            goto fail;
+        }
+        if (access(ctx->ca_file, R_OK) != 0) {
+            ret = AVERROR(errno);
+            av_log(NULL, AV_LOG_ERROR, "ijkws: cannot read ws_ca_file %s: %s\n",
+                   ctx->ca_file, av_err2str(ret));
+            goto fail;
+        }
+    }
 
     ctx->buf = ijkws_buf_alloc(IJKWS_BUF_INITIAL);
     if (!ctx->buf) {
@@ -378,6 +585,30 @@ int ijkws_open(IjkWsContext **out, const char *url, AVDictionary **opts, const A
      */
     info.timeout_secs         = (unsigned int)(ctx->timeout_ms / 1000 + 2);
     info.connect_timeout_secs = (unsigned int)(ctx->timeout_ms / 1000 + 2);
+    info.pt_serv_buf_size     = IJKWS_SERV_BUF_SIZE;
+    /*
+     * 不开 LWS_SERVER_OPTION_VALIDATE_UTF8：文本帧里也可能是二进制 FLV。
+     * ws_origin 原样发送（lws 默认会改写成 "http(s)://<origin>"，client-http.c lws_generate_client_handshake）。
+     */
+    if (ctx->origin)
+        info.options |= LWS_SERVER_OPTION_JUST_USE_RAW_ORIGIN;
+    if (is_wss && ctx->tls_verify) {
+        /*
+         * client_ssl_ca_filepath 在 lws_context_creation_info 中；lws_create_context 用同一份 info
+         * 创建默认 vhost（context.c），vhost 创建时 lws_context_init_client_ssl 取它（优先于
+         * ssl_ca_filepath，tls-client.c），由 lws_tls_client_create_vhost_context 加载到该 vhost 的
+         * 客户端 SSL_CTX（openssl-client.c，SSL_CTX_load_verify_file/locations）。
+         * 同时关掉 OS CA（LWS_SSL_CLIENT_USE_OS_CA_CERTS 下默认会 set_default_verify_paths），
+         * 只信任 ws_ca_file，主机与设备行为一致。
+         */
+        info.client_ssl_ca_filepath = ctx->ca_file;
+        info.options |= LWS_SERVER_OPTION_DISABLE_OS_CA_CERTS;
+    }
+#ifdef IJKWS_HAVE_OPENSSL
+    /* IP 字面量：握手开始时去掉 SNI、改为按 IP 校验（见 fix_tls_for_ip_literal） */
+    if (is_wss && ctx->host_is_ip)
+        info.ssl_info_event_mask = SSL_CB_HANDSHAKE_START;
+#endif
     ctx->lws = lws_create_context(&info);
     if (!ctx->lws) {
         av_log(NULL, AV_LOG_ERROR, "ijkws: lws_create_context failed\n");
@@ -393,10 +624,19 @@ int ijkws_open(IjkWsContext **out, const char *url, AVDictionary **opts, const A
     ci.port     = ctx->port;
     ci.path     = ctx->path;
     ci.host     = ctx->host_hdr; /* Host 头；wss 的 SNI 也取自这里（lws 去掉 :port） */
-    ci.origin   = ctx->host;
-    ci.protocol = NULL;
+    /*
+     * Origin：RFC 6455 §4.1 只要求浏览器发送，非浏览器客户端可以不带。未给 ws_origin 时不发
+     * （lws 只在 origin 非 NULL 时才写 Origin 头），避免伪造一个与页面无关的来源。
+     */
+    ci.origin   = ctx->origin;
+    /* Sec-WebSocket-Protocol；服务器回的子协议必须在其中（client-ws.c），回调仍绑定到本地的 "ijkws" */
+    ci.protocol = ctx->protocol;
+    ci.local_protocol_name = ws_protocols[0].name;
     ci.pwsi     = &ctx->wsi;
-    if (is_wss) {
+    if (is_wss && ctx->tls_verify) {
+        /* 严格校验：证书链（只信任 ws_ca_file）+ 主机名（IP 字面量按 IP） */
+        ci.ssl_connection = LCCSCF_USE_SSL;
+    } else if (is_wss) {
         /*
          * 默认不校验证书（与工程现有 https 的 tls_verify=0 一致）。
          * ALLOW_INSECURE 用于接受“找不到签发者”的证书：设备上没有 OpenSSL 可用的
@@ -527,6 +767,11 @@ void ijkws_close(IjkWsContext **pctx)
         ctx->lws = NULL;
     }
     ijkws_buf_free(&ctx->buf);
+    av_freep(&ctx->headers);
+    av_freep(&ctx->user_agent);
+    av_freep(&ctx->origin);
+    av_freep(&ctx->protocol);
+    av_freep(&ctx->ca_file);
     free(ctx);
     *pctx = NULL;
 }
