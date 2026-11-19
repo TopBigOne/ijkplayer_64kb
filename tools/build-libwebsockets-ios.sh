@@ -69,6 +69,8 @@ build_one() {
     cmake --build "$bld"
     cmake --install "$bld" > /dev/null
     rm -rf "$out/lib/cmake" "$out/lib/pkgconfig" "$out/share" "$out/bin"
+    # 记录所用 OpenSSL 版本，ijkws.c 编译期校验与 FFmpeg 的 OpenSSL 一致
+    "$ROOT/tools/write-lws-openssl-version.sh" "$ssl/include" "$out/include"
     echo "-> $out"
 }
 

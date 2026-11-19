@@ -80,6 +80,8 @@ for arch in "${ARCHS[@]}"; do
     cmake --install "$bld" > /dev/null
     # 只保留头文件和 libwebsockets.so
     rm -rf "$out/lib/cmake" "$out/lib/pkgconfig" "$out/share" "$out/bin"
+    # 记录所用 OpenSSL 版本，ijkws.c 编译期校验与 libijkplayer 的 OpenSSL 一致
+    "$ROOT/tools/write-lws-openssl-version.sh" "$ssl/include" "$out/include"
     "$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-strip" --strip-unneeded "$out/lib/libwebsockets.so"
     echo "-> $out"
 done

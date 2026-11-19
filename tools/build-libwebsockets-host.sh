@@ -45,4 +45,6 @@ cmake -S "$LWS_SRC" -B "$bld" -G Ninja \
 cmake --build "$bld"
 cmake --install "$bld" > /dev/null
 rm -rf "$out/lib/cmake" "$out/lib/pkgconfig" "$out/share" "$out/bin"
+# 记录所用 OpenSSL 版本，ijkws.c 编译期校验与测试程序链接的 OpenSSL 一致
+"$ROOT/tools/write-lws-openssl-version.sh" "$OPENSSL/include" "$out/include"
 echo "-> $out"

@@ -21,8 +21,21 @@
 
 #include <libwebsockets.h>
 #if defined(LWS_OPENSSL_SUPPORT) && !defined(LWS_WITH_MBEDTLS)
+#include <openssl/opensslv.h>
 #include <openssl/ssl.h>
 #include <openssl/x509_vfy.h>
+/*
+ * 编译 lws 时所用 OpenSSL 的版本，由 tools/write-lws-openssl-version.sh 写进 lws 的安装目录
+ * （tools/build-libwebsockets-{android,ios,host}.sh 调用）。缺这个头文件说明 lws 产物过旧，需要重编。
+ */
+#include "ijk_lws_openssl_version.h"
+/*
+ * 不变式：ijkws.c 直接调用的 OpenSSL（这里的头文件、链接进本库的那份）必须与 lws 内部使用的
+ * 是同一个 OpenSSL 构建，原因见 fix_tls_for_ip_literal。这里在编译期强制检查版本一致。
+ */
+#if IJK_LWS_OPENSSL_VERSION_NUMBER != OPENSSL_VERSION_NUMBER
+#error "libwebsockets was built against a different OpenSSL than ijkws.c: rebuild it with tools/build-libwebsockets-*.sh (see ijk_lws_openssl_version.h)"
+#endif
 #define IJKWS_HAVE_OPENSSL 1
 #endif
 
@@ -43,10 +56,14 @@
 #define IJKWS_DEFAULT_TIMEOUT_MS 10000
 #define IJKWS_BUF_INITIAL        (256 * 1024)
 /*
- * lws 每线程的收发缓冲；握手请求（请求行 + 全部 Header）在其中拼装，默认 4096 放不下
- * 带长 token 的 URL 加上 ws_headers，因此放大。
+ * 握手相关的两处 lws 上限，默认都是 4096，放不下带长 token 的 URL 加 ws_headers，统一放大：
+ *   - pt_serv_buf_size：每线程收发缓冲，握手请求（请求行 + 全部 Header）在其中拼装；
+ *   - max_http_header_data：每连接 ah 的数据区（lws-context-vhost.h，context.c 默认 LWS_DEF_HEADER_LEN），
+ *     客户端的 path / Host / Origin / 子协议都存在这里（connect.c lws_hdr_simple_create），
+ *     服务器响应头也解析到这里。字段是 unsigned short，16K 在范围内。
+ * ctx->path 用同一上限。
  */
-#define IJKWS_SERV_BUF_SIZE      (16 * 1024)
+#define IJKWS_HDR_LIMIT          (16 * 1024)
 /* 每个 lws_context 只有一条连接；限制 fd 表大小，避免按进程 ulimit 分配大数组 */
 #define IJKWS_FD_LIMIT           8
 /*
@@ -91,7 +108,7 @@ struct IjkWsContext {
     char                   host[256];
     char                   host_hdr[272];   /* Host 头：host 或 host:port，IPv6 字面量加 [] */
     char                   ip[64];
-    char                   path[4096];
+    char                   path[IJKWS_HDR_LIMIT];
     int                    port;
     int                    host_is_ip;  /* URL 主机是 IPv4/IPv6 字面量 */
 
@@ -188,7 +205,7 @@ static int append_handshake_headers(IjkWsContext *ctx, char **p, size_t len)
     return 0;
 
 overflow:
-    av_log(NULL, AV_LOG_ERROR, "ijkws: handshake headers too long (limit %d bytes)\n", IJKWS_SERV_BUF_SIZE);
+    av_log(NULL, AV_LOG_ERROR, "ijkws: handshake headers too long (limit %d bytes)\n", IJKWS_HDR_LIMIT);
     return -1;
 }
 
@@ -203,6 +220,16 @@ overflow:
  * lws v4.3 没有单独设置 SNI 的字段或标志，因此在握手开始（ClientHello 生成之前）修正：
  *   - 清掉 SNI：RFC 6066 §3 规定 SNI 不能是 IP 字面量；
  *   - 校验模式下把主机名校验换成对 URL 中 IP 的校验（证书 SAN 的 iPAddress）。
+ *
+ * 跨 OpenSSL 副本的不变式（Android）：libwebsockets.so 静态链接并隐藏了自己的一份 OpenSSL（A），
+ * SSL* 由 A 创建；这里的 SSL_set_tlsext_host_name / SSL_get0_param / X509_VERIFY_PARAM_* 则解析到
+ * libijkplayer.so 里的另一份（B）。set1_ip_asc / set1_host 会在 B 中分配或释放 param 里的内存，
+ * 之后由 A 在 SSL_free 时释放，因此要求：
+ *   1. A、B 是同一个 OpenSSL 构建（SSL / X509_VERIFY_PARAM / OPENSSL_STACK 布局一致）——
+ *      由文件开头的 IJK_LWS_OPENSSL_VERSION_NUMBER 检查在编译期强制；
+ *   2. 两份的 CRYPTO_malloc/free 都落到 libc：本进程中任何地方都不得调用 CRYPTO_set_mem_functions。
+ * iOS 与主机测试只有一份 OpenSSL，不涉及第 2 条，但版本检查同样生效。
+ * 不 patch libwebsockets（库保持原样）。
  */
 static int fix_tls_for_ip_literal(IjkWsContext *ctx, struct lws *wsi)
 {
@@ -388,7 +415,7 @@ static int has_crlf(const char *s)
 /*
  * 读取 ws_* 选项并从 opts 中删除（无论成功与否都删，避免 avformat_open_input 报 "Option not found"）；
  * user_agent 与 FFmpeg http 共用，只读不删。
- * 选项非法时返回 AVERROR(EINVAL)（ws_timeout / ws_tls_verify 非法只告警，用默认值）。
+ * 选项非法时返回 AVERROR(EINVAL)（ws_timeout 非法只告警，用默认值；ws_tls_verify 非法报错）。
  */
 static int parse_options(IjkWsContext *ctx, AVDictionary **opts)
 {
@@ -423,10 +450,13 @@ static int parse_options(IjkWsContext *ctx, AVDictionary **opts)
                    timeout, IJKWS_DEFAULT_TIMEOUT_MS);
     }
     if (verify) {
-        if (!strcmp(verify, "0") || !strcmp(verify, "1"))
+        /* 非法值不能静默退回“不校验”：报错，让配置问题暴露出来 */
+        if (!strcmp(verify, "0") || !strcmp(verify, "1")) {
             ctx->tls_verify = verify[0] == '1';
-        else
-            av_log(NULL, AV_LOG_WARNING, "ijkws: invalid ws_tls_verify '%s', using 0\n", verify);
+        } else {
+            av_log(NULL, AV_LOG_ERROR, "ijkws: invalid ws_tls_verify '%s' (expect 0 or 1)\n", verify);
+            ret = AVERROR(EINVAL);
+        }
     }
     av_freep(&timeout);
     av_freep(&verify);
@@ -447,7 +477,8 @@ static int parse_options(IjkWsContext *ctx, AVDictionary **opts)
         while (*s) {
             size_t n = strcspn(s, "\r\n");
             const char *colon = memchr(s, ':', n);
-            if (n > 0 && (!colon || colon == s)) {
+            /* 以 SP / HTAB 开头是续行（obs-fold，RFC 7230 §3.2.4 已废弃，服务器可能拒绝或误解析） */
+            if (n > 0 && (!colon || colon == s || *s == ' ' || *s == '\t')) {
                 av_log(NULL, AV_LOG_ERROR, "ijkws: malformed ws_headers line '%.*s'\n", (int)n, s);
                 ret = AVERROR(EINVAL);
                 break;
@@ -472,6 +503,11 @@ static int parse_url(IjkWsContext *ctx, const char *url)
         return AVERROR(EINVAL);
     if (!ctx->host[0])
         return AVERROR(EINVAL);
+    /* av_url_split 会静默截断；path（含 query）放不下时报错，而不是带着残缺的 token 去连 */
+    if (strlen(path) >= sizeof(path) - 2) {
+        av_log(NULL, AV_LOG_ERROR, "ijkws: url path too long (limit %d bytes)\n", (int)sizeof(path) - 2);
+        return AVERROR(EINVAL);
+    }
 
     if (port <= 0)
         port = av_strcasecmp(ctx->scheme, "wss") ? 80 : 443;
@@ -585,7 +621,8 @@ int ijkws_open(IjkWsContext **out, const char *url, AVDictionary **opts, const A
      */
     info.timeout_secs         = (unsigned int)(ctx->timeout_ms / 1000 + 2);
     info.connect_timeout_secs = (unsigned int)(ctx->timeout_ms / 1000 + 2);
-    info.pt_serv_buf_size     = IJKWS_SERV_BUF_SIZE;
+    info.pt_serv_buf_size     = IJKWS_HDR_LIMIT;
+    info.max_http_header_data = IJKWS_HDR_LIMIT;
     /*
      * 不开 LWS_SERVER_OPTION_VALIDATE_UTF8：文本帧里也可能是二进制 FLV。
      * ws_origin 原样发送（lws 默认会改写成 "http(s)://<origin>"，client-http.c lws_generate_client_handshake）。

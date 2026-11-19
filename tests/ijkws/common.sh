@@ -15,7 +15,8 @@ IJKWS_SRCS=("$SRC/ijkws.c" "$SRC/ijkws_buf.c" "$HERE/resolve_host.c")
 
 ensure_lws() {
     mkdir -p "$BUILD"
-    if [ ! -f "$LWS/lib/libwebsockets.a" ]; then
+    # 缺版本头（旧的 lws 产物）也重新编译
+    if [ ! -f "$LWS/lib/libwebsockets.a" ] || [ ! -f "$LWS/include/ijk_lws_openssl_version.h" ]; then
         "$ROOT/tools/build-libwebsockets-host.sh" || return 1
     fi
 }

@@ -196,6 +196,96 @@ static void test_tls_verify_missing_ca_file(void)
     CHECK(ctx == NULL);
 }
 
+/* ws_tls_verify 只接受 "0" / "1"：其他值不能悄悄关掉校验 */
+static void test_tls_verify_invalid_value(void)
+{
+    AVDictionary *opts = NULL;
+    IjkWsContext *ctx = NULL;
+    char ca[1024];
+    int ret;
+    av_dict_set(&opts, "ws_tls_verify", "yes", 0);
+    av_dict_set(&opts, "ws_ca_file", test_path(ca, sizeof(ca), "server.crt"), 0);
+    ret = ijkws_open(&ctx, "wss://localhost:" WSS_PORT "/flv", &opts, NULL);
+    CHECK(!av_dict_get(opts, "ws_tls_verify", NULL, 0));
+    CHECK(!av_dict_get(opts, "ws_ca_file", NULL, 0));
+    av_dict_free(&opts);
+    CHECK_EQ_INT(ret, AVERROR(EINVAL));
+    CHECK(ctx == NULL);
+}
+
+/* 续行（obs-fold，RFC 7230 §3.2.4 已废弃）：以 SP / HTAB 开头的行要拒绝 */
+static void expect_headers_rejected(const char *headers)
+{
+    AVDictionary *opts = NULL;
+    IjkWsContext *ctx = NULL;
+    int ret;
+    av_dict_set(&opts, "ws_headers", headers, 0);
+    ret = ijkws_open(&ctx, WS_BASE "/flv", &opts, NULL);
+    CHECK(!av_dict_get(opts, "ws_headers", NULL, 0));
+    av_dict_free(&opts);
+    CHECK_EQ_INT(ret, AVERROR(EINVAL));
+    CHECK(ctx == NULL);
+}
+
+static void test_ws_headers_obs_fold_rejected(void)
+{
+    expect_headers_rejected("X-A: 1\r\n continued");
+    if (g_test_cur_failed) return;
+    expect_headers_rejected("X-A: 1\r\n\tcontinued");
+    if (g_test_cur_failed) return;
+    expect_headers_rejected(" X-A: 1");
+}
+
+/* 长 token：query 6000 字节，握手（lws 的 ah 与 serv_buf）都要放得下，服务器看到完整 query */
+static void test_long_query_token(void)
+{
+    IjkWsContext *ctx = NULL;
+    const size_t tok_len = 6000;
+    char prefix[64], *query, *url, *needle, *line = NULL;
+    size_t cap = 0;
+    FILE *f;
+    int found = 0;
+
+    snprintf(prefix, sizeof(prefix), "n=%lld&token=", (long long)now_ms());
+    query = malloc(strlen(prefix) + tok_len + 1);
+    strcpy(query, prefix);
+    memset(query + strlen(prefix), 'a', tok_len);
+    query[strlen(prefix) + tok_len] = '\0';
+    url = malloc(strlen(query) + 64);
+    sprintf(url, WS_BASE "/flv?%s", query);
+    needle = malloc(strlen(query) + 32);
+    sprintf(needle, "\"query\": \"%s\"", query);
+
+    {
+        int ret = ijkws_open(&ctx, url, NULL, NULL);
+        free(url);
+        if (ret != 0) {
+            free(query);
+            free(needle);
+            CHECK_EQ_INT(ret, 0);
+        }
+    }
+    read_expect_flv(&ctx);
+    if (g_test_cur_failed) {
+        free(query);
+        free(needle);
+        return;
+    }
+    f = fopen(getenv("IJKWS_TEST_LOG"), "r");
+    while (f && getline(&line, &cap, f) > 0) {
+        if (strstr(line, "\"event\": \"connect\"") && strstr(line, needle)) {
+            found = 1;
+            break;
+        }
+    }
+    if (f)
+        fclose(f);
+    free(line);
+    free(query);
+    free(needle);
+    CHECK(found);
+}
+
 /* 期望 query 对应连接的 SNI：expect 为 NULL 表示没有 SNI */
 static void expect_sni(const char *query, const char *expect)
 {
@@ -258,6 +348,9 @@ int main(void)
     RUN(test_tls_verify_wrong_ca);
     RUN(test_tls_verify_no_ca);
     RUN(test_tls_verify_missing_ca_file);
+    RUN(test_tls_verify_invalid_value);
+    RUN(test_ws_headers_obs_fold_rejected);
+    RUN(test_long_query_token);
     RUN(test_sni_hostname);
     RUN(test_sni_none_for_ipv4);
     RUN(test_sni_none_for_ipv6);
