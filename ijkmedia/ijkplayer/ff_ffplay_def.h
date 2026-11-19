@@ -291,6 +291,10 @@ typedef struct VideoState {
     AVFormatContext *ic;
     int realtime;
 
+    /* ws:// / wss:// 走 ijkws 自定义 AVIO；由 ws_release() 释放（可重复调用） */
+    struct IjkWsContext *ws;
+    AVIOContext *ws_avio;
+
     Clock audclk;
     Clock vidclk;
     Clock extclk;

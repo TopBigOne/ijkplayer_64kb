@@ -65,6 +65,7 @@
 
 #include "ijksdl/ijksdl_log.h"
 #include "ijkavformat/ijkavformat.h"
+#include "ijkavformat/ijkws.h"
 #include "ff_cmdutils.h"
 #include "ff_fferror.h"
 #include "ff_ffpipeline.h"
@@ -984,6 +985,17 @@ static void stream_component_close(FFPlayer *ffp, int stream_index)
     }
 }
 
+/* 释放 ws 自定义 AVIO 和 ijkws 实例。必须在 avformat_close_input 之后调用
+ * （AVFMT_FLAG_CUSTOM_IO 时 FFmpeg 不释放 pb）。可重复调用 */
+static void ws_release(VideoState *is)
+{
+    if (is->ws_avio) {
+        av_freep(&is->ws_avio->buffer);
+        avio_context_free(&is->ws_avio);
+    }
+    ijkws_close(&is->ws);
+}
+
 static void stream_close(FFPlayer *ffp)
 {
     VideoState *is = ffp->is;
@@ -1003,6 +1015,7 @@ static void stream_close(FFPlayer *ffp)
         stream_component_close(ffp, is->subtitle_stream);
 
     avformat_close_input(&is->ic);
+    ws_release(is);
 
     av_log(NULL, AV_LOG_DEBUG, "wait for video_refresh_tid\n");
     SDL_WaitThread(is->video_refresh_tid, NULL);
@@ -3110,6 +3123,39 @@ static int read_thread(void *arg)
 
     av_dict_set_intptr(&ffp->format_opts, "video_cache_ptr", (intptr_t)&ffp->stat.video_cache, 0);
     av_dict_set_intptr(&ffp->format_opts, "audio_cache_ptr", (intptr_t)&ffp->stat.audio_cache, 0);
+
+    if (av_stristart(is->filename, "ws://", NULL) ||
+        av_stristart(is->filename, "wss://", NULL)) {
+        /* ws/wss：FFmpeg 4.0 预编译库无法注册新协议，改用 ijkws 自定义 AVIO 喂给 flv demuxer */
+        uint8_t *ws_buf;
+
+        err = ijkws_open(&is->ws, is->filename, &ffp->format_opts, &ic->interrupt_callback);
+        if (err < 0) {
+            print_error(is->filename, err);
+            last_error = err;
+            ret = -1;
+            goto fail;
+        }
+        ws_buf = av_malloc(32768);
+        if (!ws_buf) {
+            last_error = AVERROR(ENOMEM);
+            ret = -1;
+            goto fail;
+        }
+        is->ws_avio = avio_alloc_context(ws_buf, 32768, 0, is->ws, ijkws_read, NULL, NULL);
+        if (!is->ws_avio) {
+            av_free(ws_buf);
+            last_error = AVERROR(ENOMEM);
+            ret = -1;
+            goto fail;
+        }
+        is->ws_avio->seekable = 0;
+        ic->pb = is->ws_avio;
+        ic->flags |= AVFMT_FLAG_CUSTOM_IO;
+        if (!is->iformat)
+            is->iformat = av_find_input_format("flv");
+    }
+
     err = avformat_open_input(&ic, is->filename, is->iformat, &ffp->format_opts);
     if (err < 0) {
         print_error(is->filename, err);
@@ -3620,6 +3666,8 @@ static int read_thread(void *arg)
  fail:
     if (ic && !is->ic)
         avformat_close_input(&ic);
+    if (!is->ic)
+        ws_release(is);  /* is->ic 已接管时由 stream_close 释放 */
 
     if (!ffp->prepared || !is->abort_request) {
         ffp->last_error = last_error;
