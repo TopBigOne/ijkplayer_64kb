@@ -6,7 +6,8 @@
 #         ijkws_cat 提前退出，或 RSS 首尾增长 > 10MB 判 FAIL。
 # switch：反复 起进程 -> 收到>=1 字节(最多等 2s) -> SIGINT -> 间隔 interval_s，统计失败数；
 #         若 $RELAY_LOG（默认本地 live 环境的 relay.jsonl）存在，对比本次新增的
-#         relay_connect / relay_close 数量；并检查 URL 端口上 ESTABLISHED 连接数回到 0。
+#         relay_connect / relay_close 数量；并检查本脚本起的 ijkws_cat 进程均已退出且无残留 TCP 连接；
+#         仅当主机是回环地址时，再检查该端口上 ESTABLISHED 连接数回到 0。
 # 选项原样传给 ijkws_cat，例如 -o ws_headers='Authorization: Bearer xxx'、-o ws_tls_verify=0。
 # 输出：tests/ijkws/build/soak/<时间戳>/ 下的 CSV / 日志。退出码 0=PASS，1=FAIL，2=用法错误。
 set -uo pipefail
@@ -17,7 +18,7 @@ RELAY_LOG="${RELAY_LOG:-$BUILD/live/relay.jsonl}"
 RSS_LIMIT_KB=$((10 * 1024))
 SAMPLE_S=10
 
-usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 [ $# -ge 1 ] || usage
 MODE="$1"; shift
@@ -105,6 +106,8 @@ cmd_soak() {
 
 # ---------------------------------------------------------------- switch
 estab_count() { lsof -nP -iTCP:"$1" -sTCP:ESTABLISHED 2>/dev/null | tail -n +2 | wc -l | tr -d ' '; }
+url_host() { local hp="${URL#*://}"; hp="${hp%%/*}"; hp="${hp##*@}"; hp="${hp#[}"; hp="${hp%%]*}"; echo "${hp%%:*}"; }
+ALL_PIDS=()
 
 cmd_switch() {
     local count="${2:-}" interval="${3:-}"
@@ -117,7 +120,7 @@ cmd_switch() {
     echo "switch: $URL x$count, interval ${interval}s, output $OUT"
     for i in $(seq 1 "$count"); do
         "$CAT" "${OPTS[@]+"${OPTS[@]}"}" "$URL" >"$data" 2>"$OUT/cat.$i.stderr" &
-        pid=$!; CAT_PID=$pid
+        pid=$!; CAT_PID=$pid; ALL_PIDS+=($pid)
         sz=0
         for w in $(seq 1 40); do   # 最多等 2s
             sz=$(stat -f %z "$data" 2>/dev/null || echo 0)
@@ -153,9 +156,22 @@ cmd_switch() {
     else
         echo "relay events  : skipped (no $RELAY_LOG; set RELAY_LOG to enable)"
     fi
-    local est; est=$(estab_count "$port")
-    echo "ESTABLISHED on :$port = $est"
-    [ "$est" -eq 0 ] || { echo "FAIL: leftover ESTABLISHED connections"; bad=1; }
+    local alive=0 p socks=0
+    for p in ${ALL_PIDS[@]+"${ALL_PIDS[@]}"}; do
+        if kill -0 "$p" 2>/dev/null; then
+            alive=$((alive + 1))
+            socks=$((socks + $(lsof -nP -a -p "$p" -iTCP 2>/dev/null | tail -n +2 | wc -l)))
+        fi
+    done
+    echo "own ijkws_cat still alive = $alive (open TCP sockets: $socks)"
+    [ "$alive" -eq 0 ] || { echo "FAIL: ijkws_cat processes left running"; bad=1; }
+    case "$(url_host)" in
+        127.0.0.1|localhost|::1)
+            local est; est=$(estab_count "$port")
+            echo "ESTABLISHED on loopback :$port = $est"
+            [ "$est" -eq 0 ] || { echo "FAIL: leftover ESTABLISHED connections"; bad=1; } ;;
+        *) echo "server-port ESTABLISHED check skipped (non-loopback host)" ;;
+    esac
     [ "$fail" -eq 0 ] || bad=1
     [ $bad -eq 0 ] && echo "PASS" || echo "RESULT: FAIL"
     return $bad
