@@ -2,6 +2,15 @@
 
 状态：待测 / 通过 / 失败。日期为最近一次更新。
 
+## 集成须知
+
+- **全新 clone 先编 lws**：`third-libs`（Android）是指向未跟踪构建产物 `FFToolChain/build/product/android/universal` 的软链接，lws 产物不在仓库里。构建 App 前先执行 `tools/build-libwebsockets-android.sh` 和 `tools/build-libwebsockets-ios.sh`。
+- **Android 库名**：ijk 自带的 lws 是 `libijkwebsockets.so`（文件名与 SONAME），不是 `libwebsockets.so`，避免与第三方 SDK 自带的 libwebsockets.so 冲突。自定义 `IjkLibLoader` 或自己重新打包 so 的 App 需带上 `libijkwebsockets.so`，并在 `ijkplayer` 之前加载（`loadLibrary("ijkwebsockets")`）。
+- **关闭耗时在调用线程上**：`stream_close` → ijkws 优雅关闭（发 close 帧、等对端回应）每个播放器最多约 100ms，发生在调用 stop/release 的线程。宫格等同时释放多路播放器的场景，请在非主线程释放，避免主线程累计阻塞。
+- **SIGPIPE**：lws 创建 context 时把 SIGPIPE 设为 SIG_IGN，作用于整个进程。
+- **日志**：ijkws 自己的日志对 URL 脱敏（query 显示为 `?<redacted>`，不打印 ws_headers 内容）；但 ff_ffplay 现有的 `ffp_show_dict` 会在 INFO 级别打印全部 format 选项（含 `ws_headers` 的值），本次未改。
+- **lws 心跳**：ijkws 关闭了 lws 默认的 validity 检查（300s 无 PONG 发 PING、310s 断开），不会主动发 PING；存活只由 `ws_timeout`（读期间无数据超时）判断。主机慢测：`IJKWS_SLOW_TESTS=1 tests/ijkws/run.sh test_slow_nopong`（约 5.5 分钟，服务器从不回 PONG，流必须完整读完）。2026-11-20 主机通过：330132ms 读到 EOF、服务器未收到 PING；同场景修复前的代码在 310095ms 返回 -5（EIO），服务器在约 300s 收到 PING。
+
 ## Android
 
 通用准备（设备 R5CWA1RSV3T，Android 14）：
@@ -24,17 +33,19 @@ adb reverse tcp:18780 tcp:18780; adb reverse tcp:18781 tcp:18781; adb reverse tc
 
 | # | 项目 | 步骤 | 预期 | 状态 | 日期 |
 |---|------|------|------|------|------|
-| A1 | 构建与打包 | `./gradlew :ijkplayer-cmake:assembleRelease :ijkplayer-example:assembleDebug`；`unzip -l` AAR；`llvm-readelf -d libijkplayer.so` | AAR 两个 ABI 均含 libijkplayer.so 与 libwebsockets.so；NEEDED 含 libwebsockets.so | 通过 | 2026-11-19 |
-| A2 | ws 起播 | 启动 `ws://127.0.0.1:18780/live/test.flv` | 有画面和声音 | 待测 | 2026-11-19 |
+| A1 | 构建与打包 | `./gradlew :ijkplayer-cmake:assembleRelease :ijkplayer-example:assembleDebug`；`unzip -l` AAR；`llvm-readelf -d libijkplayer.so` | AAR 两个 ABI 均含 libijkplayer.so 与 libijkwebsockets.so（无 libwebsockets.so）；libijkwebsockets.so 的 SONAME 为 libijkwebsockets.so；libijkplayer.so 的 NEEDED 含 libijkwebsockets.so | 通过（改名后重验） | 2026-11-19 |
+| A2 | ws 起播 | 启动 `ws://127.0.0.1:18780/live/test.flv`（使用改名后的 libijkwebsockets.so 构建） | 有画面和声音；无 UnsatisfiedLinkError | 待测 | 2026-11-19 |
 | A3 | wss 起播 | 启动 `wss://127.0.0.1:18781/live/test.flv` | 有画面和声音 | 待测 | 2026-11-19 |
 | A4 | 退出耗时 | 播放中：`adb logcat -c`；`adb shell log -t mark BEFORE_BACK; adb shell input keyevent 4`；然后 `adb logcat -v time -d \| grep -E "BEFORE_BACK\|ijkmp_shutdown_l\|ijkws"`。比较 mark 行与 `ijkmp_shutdown_l()=void` 行的时间戳（ijkws 没有专门的 close 完成日志，shutdown 返回即包含 ijkws_close；若有 `ijkws: no close reply within 200 ms` 说明对端未回应 close） | mark 到 `ijkmp_shutdown_l()=void` <= 200ms（含返回键到 release 的少量 UI 开销，略超请复测并看 `ijkmp_shutdown_l()` 开始行单独量 shutdown 耗时） | 待测 | 2026-11-19 |
 | A5 | 401 错误码 | 启动 `ws://127.0.0.1:18790/status/401` | 日志出现 `ijkws: connect ws://127.0.0.1:18790/status/401 failed: HTTP 401`，随后 `FFP_MSG_ERROR: -825242872`。AVERROR_HTTP_UNAUTHORIZED = -FFERRTAG(0xF8,'4','0','1') = -(0xF8 \| '4'<<8 \| '0'<<16 \| '1'<<24) = -825242872 | 待测 | 2026-11-19 |
 | A6 | 读超时 | 启动 `ws://127.0.0.1:18790/silent`（默认 ws_timeout=10000，同 A5 的服务器）；`adb logcat -v time \| grep -E "ijkws\|FFP_MSG_ERROR\|FFP_MSG_OPEN_INPUT"` | open 到 `FFP_MSG_ERROR: -110` 约 10s（原 30s）；`ijkws: no data for 10000 ms, read timeout` 只出现 1 次 | 待测 | 2026-11-19 |
-| A7 | Android 5.x 启动 | 在 API 21/22 设备或模拟器启动示例 App 并播放 ws 流 | 无 UnsatisfiedLinkError（验证 websockets 先于 ijkplayer 加载） | 待测（无此类设备则注明未验证） | 2026-11-19 |
+| A7 | Android 5.x 启动 | 在 API 21/22 设备或模拟器启动示例 App 并播放 ws 流 | 无 UnsatisfiedLinkError（验证 ijkwebsockets 先于 ijkplayer 加载） | 待测（无此类设备则注明未验证） | 2026-11-19 |
 | A8 | DNS 阶段打断 | 没有网络管理权限时没有可靠的全自动方案。可行做法：设备 Wi-Fi 改静态 IP，DNS 填一个黑洞地址（如 10.255.255.1，同网段不存在的主机，查询会超时而不是秒拒绝）；用从未解析过的域名起播，如 `ws://nx-$(date +%s).example.com:18790/flv`，起播后 1s 内按返回键（`adb shell input keyevent 4`）。不要用 Private DNS 的 `hostname` 模式（失败是即时的，达不到卡住的效果）。测完恢复 Wi-Fi 设置 | 返回后界面立即响应，logcat 无 ANR（`adb shell dumpsys activity \| grep -i anr` 无新增），进程不卡死 | 待测 | 2026-11-19 |
 | A9 | http-flv 回归 | 播放示例 App 原有 http-flv 条目 | 仍正常播放 | 待测 | 2026-11-19 |
 | A10 | armv7a 设备 | 在 armeabi-v7a 设备重复 A2/A3 | 正常播放 | 待测 | 2026-11-19 |
 | A11 | 正常结束与断连 | (a) 启动 `ws://127.0.0.1:18790/flv`（服务器发完文件后发 close 1000）；(b) 启动 `ws://127.0.0.1:18790/drop`（发 64KB 后直接断 TCP） | (a) 日志出现 `FFP_MSG_COMPLETED:`，没有 `FFP_MSG_ERROR`；(b) `FFP_MSG_ERROR: -5` | 待测 | 2026-11-19 |
+| A12 | 域名解析失败 | 启动 `ws://nonexistent.invalid/x`（`.invalid` 保证解析失败） | 很快（远小于 ws_timeout 10s）出现 `ijkws: resolve nonexistent.invalid failed` 和 `FFP_MSG_ERROR: -5`，**不是** `-110`（修复前解析失败会被误报为超时） | 待测 | 2026-11-19 |
+| A13 | 日志脱敏 | 启动 `ws://127.0.0.1:18790/status/401?token=SECRET` | ijkws 日志为 `connect ws://127.0.0.1:18790/status/401?<redacted> failed: HTTP 401`，ijkws 行里不出现 `SECRET`（ffp 的通用日志不在此列） | 待测 | 2026-11-19 |
 
 ## iOS
 
@@ -55,6 +66,7 @@ iOS 上 ETIMEDOUT 是 60（Darwin），所以读超时的错误码是 -60，Andr
 | I9 | 真机 wss 起播、退出耗时、错误码 | 同 I3–I7 | 同上 | 待测 | 2026-11-19 |
 | I10 | 真机 DNS 阶段打断 | 打开 Network Link Conditioner 的 100% Loss，用域名 ws URL 起播后马上退出 | 不卡顿 | 待测 | 2026-11-19 |
 | I11 | http-flv 回归 | 播放原有 http-flv 地址 | 仍正常播放 | 待测（模拟器上用本地 `python3 -m http.server` 测试时，请求一直没有到达服务器，原因未查，跟 ws 改动无关） | 2026-11-19 |
+| I12 | 域名解析失败 | Input URL 输入 `ws://nonexistent.invalid/x` | 很快出现 `ijkws: resolve nonexistent.invalid failed` 和 FFP_MSG_ERROR -5（EIO），不是 -60 | 待测 | 2026-11-19 |
 
 ## 稳定性（Task 9）
 

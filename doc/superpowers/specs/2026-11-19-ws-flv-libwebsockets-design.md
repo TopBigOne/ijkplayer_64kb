@@ -94,9 +94,10 @@ stream_close(): avformat_close_input 之后释放 avio 和 ijkws
 
 - 源码：`/Users/dev/Documents/AV/libwebsockets`，固定到 `v4.3-stable` 分支提交 **`bb1261254`**（在 v4.3.5 之后回补了 12 个修复，包括 client-http 退出路径和 close 处理），MIT 许可。
 - **已编译完成**，脚本已就绪，可以重复执行：
-  - **Android**：[tools/build-libwebsockets-android.sh](../../../tools/build-libwebsockets-android.sh)，产出**独立动态库 `libwebsockets.so`**（用户要求单独的 so），默认编 arm64、armv7a。
+  - **Android**：[tools/build-libwebsockets-android.sh](../../../tools/build-libwebsockets-android.sh)，产出**独立动态库 `libijkwebsockets.so`**（用户要求单独的 so），默认编 arm64、armv7a。
+    - **改名**（最终评审后用户决定）：文件名与 SONAME 都是 `libijkwebsockets.so`，不用 `libwebsockets.so`。第三方 P2P / 云存储 SDK 常自带一份 `libwebsockets.so`，同名会让 AGP 打包时报 duplicate file，或运行时加载到别人那份。lws 的 `OUTPUT_NAME` 写死为 `websockets`，脚本不改 lws 源码，而是用 `CMAKE_PROJECT_libwebsockets_INCLUDE` 注入一个 `cmake_language(DEFER CALL set_target_properties(websockets_shared ... OUTPUT_NAME ijkwebsockets))`，并在编完后用 `llvm-readelf -d` 校验 SONAME。
     - OpenSSL 1.1.1w 静态链接进 so，并用 `-Wl,--exclude-libs,ALL` 隐藏 OpenSSL 符号，避免和 libijkplayer.so 里的那份 OpenSSL 互相串用。已验证导出的 OpenSSL 符号为 0 个，lws API 导出 317 个。
-    - SONAME 为 `libwebsockets.so`（不带版本号），16KB 页对齐，只依赖 libc、libm、libdl；strip 后 arm64 约 2.8MB，armv7a 约 2.2MB。
+    - SONAME 为 `libijkwebsockets.so`（不带版本号），16KB 页对齐，只依赖 libc、libm、libdl；strip 后 arm64 约 2.8MB，armv7a 约 2.2MB。
   - **iOS**：[tools/build-libwebsockets-ios.sh](../../../tools/build-libwebsockets-ios.sh)，产出**静态库 `libwebsockets.a`**：真机 arm64（iOS 11.0）一份，模拟器 arm64 + x86_64 一份。
     - 链接进 IJKMediaFramework（本身是动态 framework），和 FFmpeg 共用 OpenSSL，App 不需要额外 embed 任何东西。
     - 已对三个 slice 做过链接测试（lws + OpenSSL），无未解析符号。
@@ -110,9 +111,10 @@ stream_close(): avformat_close_input 之后释放 avio 和 ijkws
     - `LWS_WITH_SYS_ASYNC_DNS=OFF`（DNS 在 lws 外部解析，见 5.3）
     - `LWS_IPV6=ON`
 - 产物位置：
-  - Android：`third-libs/libwebsockets/libwebsockets-{arm64,armv7a}/{include,lib/libwebsockets.so}`（实际在 `FFToolChain/build/product/android/universal/` 下）
+  - Android：`third-libs/libwebsockets/libwebsockets-{arm64,armv7a}/{include,lib/libijkwebsockets.so}`（实际在 `FFToolChain/build/product/android/universal/` 下）
   - iOS：`FFToolChain/build/product/ios/{universal,universal-simulator}/libwebsockets/{include,lib/libwebsockets.a}`
 - 编译中间目录 `android/build-libwebsockets/`、`ios/build-libwebsockets/` 加入 `.gitignore`。
+- **全新 clone**：`third-libs` 是指向未跟踪构建产物（`FFToolChain/build/product/...`）的软链接，lws 产物不在仓库里。构建 App 之前先执行 `tools/build-libwebsockets-android.sh` 和 `tools/build-libwebsockets-ios.sh`。
 - libwebsockets 本地仓库已新建分支 `v4.3-stable`，指向 `bb1261254`；脚本会校验 HEAD 是否为这个提交。
 
 ### 5.3 ijkws 模块
@@ -132,6 +134,7 @@ void ijkws_close(IjkWsContext **ctx);
 **ijkws_open**
 1. `av_url_split` 解析 scheme、host、port（默认 ws 80 / wss 443）、path（含 query，原样透传）。
 2. **DNS（可打断）**：调用 libavformat 导出的 `ijk_tcp_getaddrinfo_nonblock`，传入 `int_cb` 和超时（ijkws.c 内自行 extern 声明，签名以 FFToolChain 的 ffmpeg-n4.0 补丁为准）。得到 IP 字符串后交给 lws：`connect_info.address = IP`，`connect_info.host = 原始域名`（用于 Host 头）。wss 的 SNI 必须是原始域名：已确认 lws v4.3 的 SNI 取自 `host`（`lib/tls/openssl/openssl-client.c:253`，`_WSI_TOKEN_CLIENT_HOST`），不需要额外处理。
+   - **错误码**（最终评审修复）：补丁里 `one_by_one=0` 的 `tcp_getaddrinfo_worker` 丢弃 getaddrinfo 的返回值（`last_error` 恒为 0），解析失败（域名不存在等）与超时都返回 `AVERROR_EXIT`。ijkws_resolve 按耗时区分：打断 → `AVERROR_EXIT`；未打断且耗时 < 超时 → 解析失败 `AVERROR(EIO)`；耗时 ≥ 超时 → `AVERROR(ETIMEDOUT)`。超时至少传 1us（≤0 时补丁会改走阻塞且不可打断的 getaddrinfo）。主机测试用 `tests/ijkws/resolve_host.c`，覆盖不到这条，靠真机清单 A12 / I12。
 3. 创建 lws_context（不监听端口，只注册一个 client protocol），调用 `lws_client_connect_via_info`。wss 设置 `LCCSCF_USE_SSL`，证书策略见 5.5。
 4. 握手 Header：Origin、子协议通过 connect_info 设置；`ws_headers`、`user_agent` 在 `LWS_CALLBACK_CLIENT_APPEND_HANDSHAKE_HEADER` 回调中追加。
 5. 循环 service（见"驱动与打断"），直到出现以下之一：
@@ -146,7 +149,8 @@ void ijkws_close(IjkWsContext **ctx);
 - 断线判定：收到过对端 close 帧（`LWS_CALLBACK_WS_PEER_INITIATED_CLOSE`）的，按 EOF 处理；没有 close 帧就断开的，按 `AVERROR(EIO)` 处理。二进制帧和文本帧都接受，分片消息按到达顺序拼接；FLV 是连续字节流，不关心消息边界。
 - 缓冲上限 4MB，超过时 `lws_rx_flow_control(wsi, 0)` 暂停接收，读到低于 1MB 再恢复。由于 service 只在 read 中驱动，正常情况不会触发，这里只是保护。
 - `LWS_CALLBACK_CLIENT_CLOSED` / `CLIENT_CONNECTION_ERROR`：记录状态、关闭码和原因，用 av_log 输出。
-- ping/pong 由 lws 自动处理。
+- ping/pong 由 lws 自动处理（服务器发 PING，lws 自动回 PONG）。
+- **关闭 lws 的 validity 心跳**（最终评审修复）：lws 默认距上次确认有效 300s 发 PING、310s 仍无 PONG 就断开，数据帧不算确认，遇到不回 PONG 的网关每路流都会在约 310s 断开。connect info 设 `retry_and_idle_policy` 为 `secs_since_valid_ping = secs_since_valid_hangup = 0` 的 static const 策略：`_lws_validity_confirmed_role`（core-net/wsi-timeout.c）在 hangup 为 0 时直接返回，从不安排 validity 定时器。注意 context 级的 `info.retry_and_idle_policy` 在 ping 为 0 时会被忽略（core/context.c），只能放在 connect info 上（core-net/client/connect.c 存进 `wsi->retry_policy`）。存活由 `ws_timeout` 负责。
 
 **ijkws_read**
 ```
@@ -216,15 +220,19 @@ ijkws_open 从 `ffp->format_opts` 中读取以下选项并删除：
 
 首次 open 时设置一次 `lws_set_log_level(LLL_ERR | LLL_WARN, cb)`，cb 转发到 `av_log`。连接失败原因、HTTP 状态码、关闭码和原因都以 ERROR/WARNING 级别输出，便于线上排查。
 
+- **脱敏**：ijkws 自己的日志里 URL 只打印 `scheme://host:port/path`，query（常带 token / 签名）替换为 `?<redacted>`，原始 URL 中的 userinfo 去掉；`ws_headers` 的内容一律不打印（格式错误时只报行号）。lws 自己的 WARN/ERR 日志里 wsi 标签只含 IP，不含 path。
+- **用户取消**：正在连接时被打断，`lws_context_destroy` 会回调 `CLIENT_CONNECTION_ERROR`；此时（`closing` 或打断已置位）不打 ERROR 日志。
+- **范围外但需知道**：ff_ffplay 现有的 `ffp_show_dict` 会以 INFO 级别打印全部 format 选项，**包括 `ws_headers` 的值**（以及 URL 本身在 ff_ffplay 的通用日志里也是原样打印）。本次不改 ff_ffplay 的通用日志；对日志敏感的 App 应调低 ijk 日志级别。
+
 ### 5.8 工程集成
 
 **Android**
 - `CMakeLists.txt`：
-  - `add_library(websockets-lib SHARED IMPORTED)`，`IMPORTED_LOCATION` 指向 `third-libs/libwebsockets/libwebsockets-${ARCH}/lib/libwebsockets.so`，include 目录加入 `third-libs/libwebsockets/libwebsockets-${ARCH}/include`，主目标链接 `websockets-lib`。
+  - `add_library(websockets-lib SHARED IMPORTED)`，`IMPORTED_LOCATION` 指向 `third-libs/libwebsockets/libwebsockets-${ARCH}/lib/libijkwebsockets.so`，include 目录加入 `third-libs/libwebsockets/libwebsockets-${ARCH}/include`，主目标链接 `websockets-lib`。
   - `ijkws.c` 放在 `ijkmedia/ijkplayer/ijkavformat/` 下，会被 GLOB 自动收集。
-  - `ijkws.c` 调用的 `ijk_tcp_getaddrinfo_nonblock` 在 libavformat.a 中，属于 libijkplayer.so 内部链接，不涉及 libwebsockets.so。
-- **打包**：确认 AAR 里包含 `jni/<abi>/libwebsockets.so`。AGP 4.0+ 会自动打包 CMake 链接的 IMPORTED 动态库；如果没打包进去，就改为放到 `src/main/jniLibs/<abi>/`。
-- **加载顺序**：minSdk 21，Android 5.x（API 21/22）的动态链接器不会到 App 的 lib 目录里自动查找依赖的 so。所以在 `IjkMediaPlayer.java:190` 加载 ijkplayer **之前**先调用 `libLoader.loadLibrary("websockets")`。
+  - `ijkws.c` 调用的 `ijk_tcp_getaddrinfo_nonblock` 在 libavformat.a 中，属于 libijkplayer.so 内部链接，不涉及 libijkwebsockets.so。
+- **打包**：确认 AAR 里包含 `jni/<abi>/libijkwebsockets.so`（且没有 `libwebsockets.so`）。AGP 4.0+ 会自动打包 CMake 链接的 IMPORTED 动态库；如果没打包进去，就改为放到 `src/main/jniLibs/<abi>/`。
+- **加载顺序**：minSdk 21，Android 5.x（API 21/22）的动态链接器不会到 App 的 lib 目录里自动查找依赖的 so。所以在 `IjkMediaPlayer.java:190` 加载 ijkplayer **之前**先调用 `libLoader.loadLibrary("ijkwebsockets")`。自定义 `IjkLibLoader` 或重新打包 so 的 App 要一并打包 `libijkwebsockets.so`。
 - **ABI**：两个 build.gradle 的 abiFilters 收窄为 `"arm64-v8a","armeabi-v7a"`。
 - **前置步骤**：补齐 arm64 的 FFmpeg 预编译库。
 
