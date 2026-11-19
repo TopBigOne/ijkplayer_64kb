@@ -45,7 +45,9 @@
     
     if ([scheme isEqualToString:@"http"]
         || [scheme isEqualToString:@"https"]
-        || [scheme isEqualToString:@"rtmp"]) {
+        || [scheme isEqualToString:@"rtmp"]
+        || [scheme isEqualToString:@"ws"]
+        || [scheme isEqualToString:@"wss"]) {
         [IJKVideoViewController presentFromViewController:self withTitle:[NSString stringWithFormat:@"URL: %@", url] URL:url completion:^{
 //            [self.navigationController popViewControllerAnimated:NO];
         }];
