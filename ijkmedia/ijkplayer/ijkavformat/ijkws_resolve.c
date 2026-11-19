@@ -37,6 +37,7 @@ int ijkws_resolve(const char *host, int port, char *ip, size_t ip_size,
     memset(&hints, 0, sizeof(hints));
     hints.ai_family   = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags   |= AI_ADDRCONFIG;  /* 只返回本机有对应地址族的结果（无 IPv6 时不给 AAAA） */
     snprintf(portstr, sizeof(portstr), "%d", port);
 
     ret = ijk_tcp_getaddrinfo_nonblock(host, portstr, &hints, &res, timeout_us, int_cb, 0);
@@ -50,8 +51,10 @@ int ijkws_resolve(const char *host, int port, char *ip, size_t ip_size,
             av_log(NULL, AV_LOG_ERROR, "ijkws: resolve %s timeout\n", host);
             return AVERROR(ETIMEDOUT);
         }
-        if (ret == AVERROR(ENOMEM))
+        if (ret == AVERROR(ENOMEM)) {
+            av_log(NULL, AV_LOG_ERROR, "ijkws: resolve %s out of memory\n", host);
             return ret;
+        }
         av_log(NULL, AV_LOG_ERROR, "ijkws: resolve %s failed (%d)\n", host, ret);
         return AVERROR(EIO);
     }

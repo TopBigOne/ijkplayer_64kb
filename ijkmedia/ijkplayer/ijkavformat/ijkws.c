@@ -21,8 +21,10 @@
 
 #include "libavformat/avformat.h"
 #include "libavutil/avstring.h"
+#include "libavutil/dict.h"
 #include "libavutil/error.h"
 #include "libavutil/log.h"
+#include "libavutil/time.h"
 
 #include "ijkws_buf.h"
 
@@ -51,6 +53,9 @@ struct IjkWsContext {
     int                    error;
     int                    peer_closed;
     int                    closing;     /* ijkws_close 中，不再输出断线日志 */
+
+    int                    timeout_ms;  /* ws_timeout：连接+握手超时，也是读取期间无数据的超时 */
+    int64_t                last_rx_us;  /* 最近一次收到数据（或握手成功）的时间，av_gettime_relative */
 
     char                   scheme[8];
     char                   host[256];
@@ -92,6 +97,22 @@ static void set_error(IjkWsContext *ctx, int err)
     }
 }
 
+/* 握手 HTTP 状态码 → FFmpeg 错误码；没有状态码（或非错误码）时为 EIO */
+static int http_status_to_averror(unsigned int status)
+{
+    switch (status) {
+    case 401: return AVERROR_HTTP_UNAUTHORIZED;
+    case 403: return AVERROR_HTTP_FORBIDDEN;
+    case 404: return AVERROR_HTTP_NOT_FOUND;
+    default:  break;
+    }
+    if (status >= 400 && status < 500)
+        return AVERROR_HTTP_OTHER_4XX;
+    if (status >= 500 && status < 600)
+        return AVERROR_HTTP_SERVER_ERROR;
+    return AVERROR(EIO);
+}
+
 static int ws_callback(struct lws *wsi, enum lws_callback_reasons reason,
                        void *user, void *in, size_t len)
 {
@@ -103,17 +124,32 @@ static int ws_callback(struct lws *wsi, enum lws_callback_reasons reason,
     switch (reason) {
     case LWS_CALLBACK_CLIENT_ESTABLISHED:
         ctx->state = IJKWS_STATE_ESTABLISHED;
+        ctx->last_rx_us = av_gettime_relative();
         break;
 
-    case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
-        av_log(NULL, AV_LOG_ERROR, "ijkws: connect %s://%s:%d%s failed: %s\n",
-               ctx->scheme, ctx->host, ctx->port, ctx->path,
-               in ? (const char *)in : "(unknown)");
-        set_error(ctx, AVERROR(EIO));
+    case LWS_CALLBACK_CLIENT_CONNECTION_ERROR: {
+        /*
+         * 握手被拒时（lws_client_interpret_server_handshake -> bail3），lws 先回调这里，
+         * 之后才关闭 wsi 并释放 ah，因此此刻 lws_http_client_http_response 仍能取到状态码；
+         * TCP/TLS 阶段失败时还没有响应，返回 0。in 是 lws 给出的原因字符串（可能为 NULL）。
+         */
+        unsigned int status = wsi ? lws_http_client_http_response(wsi) : 0;
+        int err = http_status_to_averror(status);
+        if (status)
+            av_log(NULL, AV_LOG_ERROR, "ijkws: connect %s://%s:%d%s failed: HTTP %u (%s)\n",
+                   ctx->scheme, ctx->host, ctx->port, ctx->path, status,
+                   in ? (const char *)in : "unknown");
+        else
+            av_log(NULL, AV_LOG_ERROR, "ijkws: connect %s://%s:%d%s failed: %s\n",
+                   ctx->scheme, ctx->host, ctx->port, ctx->path,
+                   in ? (const char *)in : "unknown");
+        set_error(ctx, err);
         ctx->wsi = NULL;
         break;
+    }
 
     case LWS_CALLBACK_CLIENT_RECEIVE:
+        ctx->last_rx_us = av_gettime_relative();
         if (len > 0 && ijkws_buf_write(ctx->buf, (const uint8_t *)in, len) < 0) {
             av_log(NULL, AV_LOG_ERROR, "ijkws: out of memory buffering %zu bytes\n", len);
             set_error(ctx, AVERROR(ENOMEM));
@@ -168,6 +204,27 @@ static void service_once(IjkWsContext *ctx)
         set_error(ctx, AVERROR(EIO));
 }
 
+/* 读取并删除 ws_timeout（毫秒）；缺省或非法时用默认值 */
+static void parse_options(IjkWsContext *ctx, AVDictionary **opts)
+{
+    AVDictionaryEntry *e;
+
+    ctx->timeout_ms = IJKWS_DEFAULT_TIMEOUT_MS;
+    if (!opts)
+        return;
+    e = av_dict_get(*opts, "ws_timeout", NULL, 0);
+    if (e) {
+        char *end = NULL;
+        long v = strtol(e->value, &end, 10);
+        if (end && end != e->value && *end == '\0' && v > 0 && v <= INT32_MAX)
+            ctx->timeout_ms = (int)v;
+        else
+            av_log(NULL, AV_LOG_WARNING, "ijkws: invalid ws_timeout '%s', using %d ms\n",
+                   e->value, IJKWS_DEFAULT_TIMEOUT_MS);
+        av_dict_set(opts, "ws_timeout", NULL, 0);
+    }
+}
+
 static int parse_url(IjkWsContext *ctx, const char *url)
 {
     char path[sizeof(ctx->path)];
@@ -215,6 +272,7 @@ int ijkws_open(IjkWsContext **out, const char *url, AVDictionary **opts, const A
     struct lws_context_creation_info info;
     struct lws_client_connect_info ci;
     IjkWsContext *ctx;
+    int64_t deadline_us, remain_us;
     int is_wss;
     int ret;
 
@@ -232,6 +290,10 @@ int ijkws_open(IjkWsContext **out, const char *url, AVDictionary **opts, const A
     if (int_cb)
         ctx->int_cb = *int_cb;
 
+    parse_options(ctx, opts);
+    /* 连接超时从 open 开始计时，覆盖 DNS、TCP、TLS 和 WebSocket 握手 */
+    deadline_us = av_gettime_relative() + (int64_t)ctx->timeout_ms * 1000;
+
     ret = parse_url(ctx, url);
     if (ret < 0) {
         av_log(NULL, AV_LOG_ERROR, "ijkws: invalid url %s\n", url);
@@ -245,12 +307,11 @@ int ijkws_open(IjkWsContext **out, const char *url, AVDictionary **opts, const A
         goto fail;
     }
 
+    /* 失败原因由 ijkws_resolve 自己输出（每次失败只记一行） */
     ret = ijkws_resolve(ctx->host, ctx->port, ctx->ip, sizeof(ctx->ip),
-                        (int64_t)IJKWS_DEFAULT_TIMEOUT_MS * 1000, &ctx->int_cb);
-    if (ret < 0) {
-        av_log(NULL, AV_LOG_ERROR, "ijkws: resolve %s failed\n", ctx->host);
+                        deadline_us - av_gettime_relative(), &ctx->int_cb);
+    if (ret < 0)
         goto fail;
-    }
 
     memset(&info, 0, sizeof(info));
     info.port                = CONTEXT_PORT_NO_LISTEN;
@@ -258,6 +319,8 @@ int ijkws_open(IjkWsContext **out, const char *url, AVDictionary **opts, const A
     info.options             = LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT;
     info.user                = ctx;
     info.fd_limit_per_thread = IJKWS_FD_LIMIT;
+    /* lws 自己的连接/握手超时（默认 20s）放宽到 ws_timeout 之后，以本模块的计时为准 */
+    info.timeout_secs        = (unsigned int)(ctx->timeout_ms / 1000 + 2);
     ctx->lws = lws_create_context(&info);
     if (!ctx->lws) {
         av_log(NULL, AV_LOG_ERROR, "ijkws: lws_create_context failed\n");
@@ -299,6 +362,13 @@ int ijkws_open(IjkWsContext **out, const char *url, AVDictionary **opts, const A
             ret = AVERROR_EXIT;
             goto fail;
         }
+        remain_us = deadline_us - av_gettime_relative();
+        if (remain_us <= 0) {
+            av_log(NULL, AV_LOG_ERROR, "ijkws: connect %s://%s:%d%s timeout after %d ms\n",
+                   ctx->scheme, ctx->host, ctx->port, ctx->path, ctx->timeout_ms);
+            ret = AVERROR(ETIMEDOUT);
+            goto fail;
+        }
         service_once(ctx);
     }
     if (ctx->state != IJKWS_STATE_ESTABLISHED) {
@@ -330,6 +400,15 @@ int ijkws_read(void *opaque, uint8_t *buf, int size)
             return AVERROR_EOF;
         if (check_interrupt(ctx))
             return AVERROR_EXIT;
+        if (av_gettime_relative() - ctx->last_rx_us >= (int64_t)ctx->timeout_ms * 1000) {
+            /*
+             * 不改变连接状态，并重新计时：调用方若重试，会再等一个完整的 ws_timeout，
+             * 期间有数据到达仍可继续读。
+             */
+            av_log(NULL, AV_LOG_ERROR, "ijkws: no data for %d ms, read timeout\n", ctx->timeout_ms);
+            ctx->last_rx_us = av_gettime_relative();
+            return AVERROR(ETIMEDOUT);
+        }
         service_once(ctx);
     }
 }

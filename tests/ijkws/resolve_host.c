@@ -21,6 +21,7 @@ int ijkws_resolve(const char *host, int port, char *ip, size_t ip_size,
     memset(&hints, 0, sizeof(hints));
     hints.ai_family   = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags   |= AI_ADDRCONFIG;  /* 只返回本机有对应地址族的结果（无 IPv6 时不给 AAAA） */
     snprintf(portstr, sizeof(portstr), "%d", port);
     if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res)
         return AVERROR(EIO);
