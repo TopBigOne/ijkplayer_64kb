@@ -3159,6 +3159,8 @@ static int read_thread(void *arg)
     err = avformat_open_input(&ic, is->filename, is->iformat, &ffp->format_opts);
     if (err < 0) {
         print_error(is->filename, err);
+        if (is->ws)
+            last_error = err;  /* ws 握手已成功、探测期间读失败：上报真实错误码 */
         ret = -1;
         goto fail;
     }
@@ -3214,6 +3216,8 @@ static int read_thread(void *arg)
         if (err < 0) {
             av_log(NULL, AV_LOG_WARNING,
                    "%s: could not find codec parameters\n", is->filename);
+            if (is->ws)  /* flv 头读取不检查 IO 错误，ws 读失败常在此处暴露：优先上报 pb 上的真实错误 */
+                last_error = (ic->pb && ic->pb->error < 0) ? ic->pb->error : err;
             ret = -1;
             goto fail;
         }
@@ -4310,7 +4314,10 @@ int ffp_prepare_async_l(FFPlayer *ffp, const char *file_name)
     }
 
     /* there is a length limit in avformat */
-    if (strlen(file_name) + 1 > 1024) {
+    /* ws/wss 走 ijkws 自定义 AVIO，不经 FFmpeg 协议层，保留原始长 URL 不改写 */
+    if (strlen(file_name) + 1 > 1024 &&
+        !av_stristart(file_name, "ws://", NULL) &&
+        !av_stristart(file_name, "wss://", NULL)) {
         av_log(ffp, AV_LOG_ERROR, "%s too long url\n", __func__);
         if (avio_find_protocol_name("ijklongurl:")) {
             av_dict_set(&ffp->format_opts, "ijklongurl-url", file_name, 0);
