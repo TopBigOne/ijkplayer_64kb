@@ -158,7 +158,7 @@ typedef struct PlayList {
     // demuxer related
     AVFormatContext* parent;
     uint8_t* read_buffer;
-    AVIOContext pb;
+    FFIOContext pb;   /* FFmpeg 5.1+：ffio_init_context 要求 FFIOContext，公开部分在 pb.pub */
     AVFormatContext* ctx;
     AVPacket pkt;
 
@@ -922,7 +922,8 @@ static int open_url(LasContext* c, URLContext** uc, const char* url,
     if (!proto_name)
         return AVERROR_INVALIDDATA;
 
-    ret = ffurl_open_whitelist(uc, url,  AVIO_FLAG_READ, c->interrupt_callback, &tmp, c->ctx->protocol_whitelist, c->ctx->protocol_blacklist, c->ctx);
+    /* parent 参数要求 URLContext*，原代码传的是 AVFormatContext*（av_opt_copy 因类不匹配直接返回，从未生效），改为 NULL 保持原行为 */
+    ret = ffurl_open_whitelist(uc, url,  AVIO_FLAG_READ, c->interrupt_callback, &tmp, c->ctx->protocol_whitelist, c->ctx->protocol_blacklist, NULL);
     if (ret >= 0) {
         log_info("ffurl_open_whitelist succeeds");
         // update cookies on http response with setcookies.
@@ -1381,7 +1382,7 @@ int PlayList_open_rep(PlayList* playlist, FlvTag* tag, AVFormatContext* s) {
     ffio_init_context(&playlist->pb, playlist->read_buffer, INITIAL_BUFFER_SIZE, 0, playlist,
                       PlayList_read_data, NULL, NULL);
 
-    playlist->ctx->pb = &playlist->pb;
+    playlist->ctx->pb = &playlist->pb.pub;
     playlist->ctx->flags |= s->flags & ~AVFMT_FLAG_CUSTOM_IO;
 
     SDL_LockMutex(playlist->rw_mutex);
@@ -1527,7 +1528,7 @@ static void PlayList_abort(PlayList* playlist) {
 void PlayList_close_rep(PlayList* playlist) {
     SDL_LockMutex(playlist->rw_mutex);
     avformat_close_input(&playlist->ctx);
-    av_freep(&playlist->pb.buffer);
+    av_freep(&playlist->pb.pub.buffer);
     log_info("close_index:%d finished", playlist->cur_rep_index);
     SDL_UnlockMutex(playlist->rw_mutex);
 }
@@ -1942,7 +1943,7 @@ static int las_read_packet(AVFormatContext* s, AVPacket* pkt) {
         ret = av_read_frame(playlist->ctx, &playlist->pkt);
         if (ret < 0) {
             reset_packet(&playlist->pkt);
-            if (avio_feof(&playlist->pb) || ret == AVERROR_EOF) {
+            if (avio_feof(&playlist->pb.pub) || ret == AVERROR_EOF) {
                 // change rep if needed
                 if (playlist->cur_switch_index != playlist->reading_tag.switch_index) {
                     PlayList_close_rep(playlist);

@@ -17,6 +17,11 @@ project(ijkplayer)
 # 此处统一关闭该警告以保证 C 和 C++ 文件都能正常编译。
 # ============================================================
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-int-conversion")
+# FFmpeg 7 迁移：多处 API 的指针参数类型变化（如 size_t* / FFIOContext*），
+# 传错类型只报 warning 却会在运行时写坏内存，这里强制为错误。
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Werror=incompatible-pointer-types")
+# 仅丢失 const 限定（如 const AVCodec* → AVCodec*）不涉及内存布局，保持为 warning
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-error=incompatible-pointer-types-discards-qualifiers")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-int-conversion")
 
 # ============================================================

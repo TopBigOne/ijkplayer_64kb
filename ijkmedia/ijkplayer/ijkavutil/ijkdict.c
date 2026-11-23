@@ -177,7 +177,8 @@ uintptr_t ijk_av_dict_strtoptr(char * value) {
 uintptr_t ijk_av_dict_get_intptr(const IjkAVDictionary *m, const char* key) {
     uintptr_t ptr = NULL;
     IjkAVDictionaryEntry *t = NULL;
-    if ((t = av_dict_get(m, key, NULL, 0))) {
+    /* 应查 ijk 自己的字典（原代码误用 FFmpeg 的 av_dict_get，仅因两者结构体布局相同才碰巧可用） */
+    if ((t = ijk_av_dict_get(m, key, NULL, 0))) {
         return ijk_av_dict_strtoptr(t->value);
     }
     return NULL;

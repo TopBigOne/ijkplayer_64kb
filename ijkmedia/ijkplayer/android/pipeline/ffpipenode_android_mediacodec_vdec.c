@@ -79,9 +79,8 @@ typedef struct IJKFF_Pipenode_Opaque {
 
     AVCodecContext           *avctx; // not own
     AVCodecParameters        *codecpar;
-    AVBitStreamFilterContext *bsfc;  // own
-
 #if AMC_USE_AVBITSTREAM_FILTER
+    AVBitStreamFilterContext *bsfc;  // own（旧 BSF API，FFmpeg 5 已删除；该分支默认关闭）
     uint8_t                  *orig_extradata;
     int                       orig_extradata_size;
 #else
@@ -452,6 +451,22 @@ fail:
     return -1;
 }
 
+/*
+ * 用软解码器解一个包，只为让 avctx 解析出新的宽高（分辨率切换探测）。
+ * 替代 FFmpeg 5 已删除的 avcodec_decode_video2：send_packet 后必须 receive_frame 一次才会真正解码，
+ * EAGAIN（尚未输出帧）不算错误，此时 avctx->width/height 已由 SPS 更新。
+ */
+static int amc_probe_decode(AVCodecContext *avctx, AVFrame *frame, const AVPacket *pkt)
+{
+    int ret = avcodec_send_packet(avctx, pkt);
+    if (ret < 0)
+        return ret;
+    ret = avcodec_receive_frame(avctx, frame);
+    if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+        return 0;
+    return ret;
+}
+
 static int feed_input_buffer2(JNIEnv *env, IJKFF_Pipenode *node, int64_t timeUs, int *enqueue_count)
 {
     IJKFF_Pipenode_Opaque *opaque   = node->opaque;
@@ -507,7 +522,7 @@ static int feed_input_buffer2(JNIEnv *env, IJKFF_Pipenode *node, int64_t timeUs,
                 d->next_pts_tb = d->start_pts_tb;
             }
         } while (ffp_is_flush_packet(&pkt) || d->queue->serial != d->pkt_serial);
-        av_packet_split_side_data(&pkt);
+        /* FFmpeg 5+ 已移除 av_packet_split_side_data：side data 不再合并进包数据，无需拆分 */
         av_packet_unref(&d->pkt);
         d->pkt_temp = d->pkt = pkt;
         d->packet_pending = 1;
@@ -515,26 +530,29 @@ static int feed_input_buffer2(JNIEnv *env, IJKFF_Pipenode *node, int64_t timeUs,
         if (opaque->ffp->mediacodec_handle_resolution_change &&
             opaque->codecpar->codec_id == AV_CODEC_ID_H264) {
             uint8_t  *size_data      = NULL;
-            int       size_data_size = 0;
+            size_t    size_data_size = 0; /* FFmpeg 5+：av_packet_get_side_data 的 size 参数为 size_t* */
             AVPacket *avpkt          = &d->pkt_temp;
             size_data = av_packet_get_side_data(avpkt, AV_PKT_DATA_NEW_EXTRADATA, &size_data_size);
             // minimum avcC(sps,pps) = 7
             if (size_data && size_data_size >= 7) {
-                int             got_picture = 0;
                 AVFrame        *frame      = av_frame_alloc();
                 AVDictionary   *codec_opts = NULL;
                 const AVCodec  *codec      = opaque->decoder->avctx->codec;
                 AVCodecContext *new_avctx  = avcodec_alloc_context3(codec);
                 int change_ret = 0;
 
-                if (!new_avctx)
+                if (!new_avctx || !frame) {
+                    avcodec_free_context(&new_avctx);
+                    av_frame_free(&frame);
                     return AVERROR(ENOMEM);
+                }
 
                 avcodec_parameters_to_context(new_avctx, opaque->codecpar);
                 av_freep(&new_avctx->extradata);
                 new_avctx->extradata = av_mallocz(size_data_size + AV_INPUT_BUFFER_PADDING_SIZE);
                 if (!new_avctx->extradata) {
                     avcodec_free_context(&new_avctx);
+                    av_frame_free(&frame);
                     return AVERROR(ENOMEM);
                 }
                 memcpy(new_avctx->extradata, size_data, size_data_size);
@@ -545,12 +563,14 @@ static int feed_input_buffer2(JNIEnv *env, IJKFF_Pipenode *node, int64_t timeUs,
                 av_dict_free(&codec_opts);
                 if (change_ret < 0) {
                     avcodec_free_context(&new_avctx);
+                    av_frame_free(&frame);
                     return change_ret;
                 }
 
-                change_ret = avcodec_decode_video2(new_avctx, frame, &got_picture, avpkt);
+                change_ret = amc_probe_decode(new_avctx, frame, avpkt);
                 if (change_ret < 0) {
                     avcodec_free_context(&new_avctx);
+                    av_frame_free(&frame);
                     return change_ret;
                 } else {
                     if (opaque->codecpar->width  != new_avctx->width &&
@@ -562,7 +582,7 @@ static int feed_input_buffer2(JNIEnv *env, IJKFF_Pipenode *node, int64_t timeUs,
                     }
                 }
 
-                av_frame_unref(frame);
+                av_frame_free(&frame);
                 avcodec_free_context(&new_avctx);
             }
         }
@@ -570,27 +590,30 @@ static int feed_input_buffer2(JNIEnv *env, IJKFF_Pipenode *node, int64_t timeUs,
         if (opaque->ffp->mediacodec_handle_resolution_change &&
             opaque->codecpar->codec_id == AV_CODEC_ID_HEVC) {
             uint8_t  *size_data      = NULL;
-            int       size_data_size = 0;
+            size_t    size_data_size = 0; /* FFmpeg 5+：av_packet_get_side_data 的 size 参数为 size_t* */
             AVPacket *avpkt          = &d->pkt_temp;
             size_data = av_packet_get_side_data(avpkt, AV_PKT_DATA_NEW_EXTRADATA, &size_data_size);
             // hvcC 固定头部至少 23 字节（比 avcC 大得多），这里只是避免把明显过短的
             // 垃圾数据传给 avcodec_open2，真正的合法性校验交给 avcodec_open2/avcodec_decode_video2 的返回值判断
             if (size_data && size_data_size >= 23) {
-                int             got_picture = 0;
                 AVFrame        *frame      = av_frame_alloc();
                 AVDictionary   *codec_opts = NULL;
                 const AVCodec  *codec      = opaque->decoder->avctx->codec;
                 AVCodecContext *new_avctx  = avcodec_alloc_context3(codec);
                 int change_ret = 0;
 
-                if (!new_avctx)
+                if (!new_avctx || !frame) {
+                    avcodec_free_context(&new_avctx);
+                    av_frame_free(&frame);
                     return AVERROR(ENOMEM);
+                }
 
                 avcodec_parameters_to_context(new_avctx, opaque->codecpar);
                 av_freep(&new_avctx->extradata);
                 new_avctx->extradata = av_mallocz(size_data_size + AV_INPUT_BUFFER_PADDING_SIZE);
                 if (!new_avctx->extradata) {
                     avcodec_free_context(&new_avctx);
+                    av_frame_free(&frame);
                     return AVERROR(ENOMEM);
                 }
                 memcpy(new_avctx->extradata, size_data, size_data_size);
@@ -601,12 +624,14 @@ static int feed_input_buffer2(JNIEnv *env, IJKFF_Pipenode *node, int64_t timeUs,
                 av_dict_free(&codec_opts);
                 if (change_ret < 0) {
                     avcodec_free_context(&new_avctx);
+                    av_frame_free(&frame);
                     return change_ret;
                 }
 
-                change_ret = avcodec_decode_video2(new_avctx, frame, &got_picture, avpkt);
+                change_ret = amc_probe_decode(new_avctx, frame, avpkt);
                 if (change_ret < 0) {
                     avcodec_free_context(&new_avctx);
+                    av_frame_free(&frame);
                     return change_ret;
                 } else {
                     if (opaque->codecpar->width  != new_avctx->width &&
@@ -618,7 +643,7 @@ static int feed_input_buffer2(JNIEnv *env, IJKFF_Pipenode *node, int64_t timeUs,
                     }
                 }
 
-                av_frame_unref(frame);
+                av_frame_free(&frame);
                 avcodec_free_context(&new_avctx);
             }
         }
@@ -811,7 +836,7 @@ static int feed_input_buffer(JNIEnv *env, IJKFF_Pipenode *node, int64_t timeUs, 
                 d->next_pts_tb = d->start_pts_tb;
             }
         } while (ffp_is_flush_packet(&pkt) || d->queue->serial != d->pkt_serial);
-        av_packet_split_side_data(&pkt);
+        /* FFmpeg 5+ 已移除 av_packet_split_side_data：side data 不再合并进包数据，无需拆分 */
         av_packet_unref(&d->pkt);
         d->pkt_temp = d->pkt = pkt;
         d->packet_pending = 1;
@@ -819,25 +844,28 @@ static int feed_input_buffer(JNIEnv *env, IJKFF_Pipenode *node, int64_t timeUs, 
         if (opaque->ffp->mediacodec_handle_resolution_change &&
             opaque->codecpar->codec_id == AV_CODEC_ID_H264) {
             uint8_t  *size_data      = NULL;
-            int       size_data_size = 0;
+            size_t    size_data_size = 0; /* FFmpeg 5+：av_packet_get_side_data 的 size 参数为 size_t* */
             AVPacket *avpkt          = &d->pkt_temp;
             size_data = av_packet_get_side_data(avpkt, AV_PKT_DATA_NEW_EXTRADATA, &size_data_size);
             // minimum avcC(sps,pps) = 7
             if (size_data && size_data_size >= 7) {
-                int             got_picture = 0;
                 AVFrame        *frame      = av_frame_alloc();
                 AVDictionary   *codec_opts = NULL;
                 const AVCodec  *codec      = opaque->decoder->avctx->codec;
                 AVCodecContext *new_avctx  = avcodec_alloc_context3(codec);
                 int change_ret = 0;
-                if (!new_avctx)
+                if (!new_avctx || !frame) {
+                    avcodec_free_context(&new_avctx);
+                    av_frame_free(&frame);
                     return AVERROR(ENOMEM);
+                }
 
                 avcodec_parameters_to_context(new_avctx, opaque->codecpar);
                 av_freep(&new_avctx->extradata);
                 new_avctx->extradata = av_mallocz(size_data_size + AV_INPUT_BUFFER_PADDING_SIZE);
                 if (!new_avctx->extradata) {
                     avcodec_free_context(&new_avctx);
+                    av_frame_free(&frame);
                     return AVERROR(ENOMEM);
                 }
                 memcpy(new_avctx->extradata, size_data, size_data_size);
@@ -848,12 +876,14 @@ static int feed_input_buffer(JNIEnv *env, IJKFF_Pipenode *node, int64_t timeUs, 
                 av_dict_free(&codec_opts);
                 if (change_ret < 0) {
                     avcodec_free_context(&new_avctx);
+                    av_frame_free(&frame);
                     return change_ret;
                 }
 
-                change_ret = avcodec_decode_video2(new_avctx, frame, &got_picture, avpkt);
+                change_ret = amc_probe_decode(new_avctx, frame, avpkt);
                 if (change_ret < 0) {
                     avcodec_free_context(&new_avctx);
+                    av_frame_free(&frame);
                     return change_ret;
                 } else {
                     if (opaque->codecpar->width  != new_avctx->width &&
@@ -865,7 +895,7 @@ static int feed_input_buffer(JNIEnv *env, IJKFF_Pipenode *node, int64_t timeUs, 
                     }
                 }
 
-                av_frame_unref(frame);
+                av_frame_free(&frame);
                 avcodec_free_context(&new_avctx);
             }
         }
@@ -873,26 +903,29 @@ static int feed_input_buffer(JNIEnv *env, IJKFF_Pipenode *node, int64_t timeUs, 
         if (opaque->ffp->mediacodec_handle_resolution_change &&
             opaque->codecpar->codec_id == AV_CODEC_ID_HEVC) {
             uint8_t  *size_data      = NULL;
-            int       size_data_size = 0;
+            size_t    size_data_size = 0; /* FFmpeg 5+：av_packet_get_side_data 的 size 参数为 size_t* */
             AVPacket *avpkt          = &d->pkt_temp;
             size_data = av_packet_get_side_data(avpkt, AV_PKT_DATA_NEW_EXTRADATA, &size_data_size);
             // hvcC 固定头部至少 23 字节（比 avcC 大得多），这里只是避免把明显过短的
             // 垃圾数据传给 avcodec_open2，真正的合法性校验交给 avcodec_open2/avcodec_decode_video2 的返回值判断
             if (size_data && size_data_size >= 23) {
-                int             got_picture = 0;
                 AVFrame        *frame      = av_frame_alloc();
                 AVDictionary   *codec_opts = NULL;
                 const AVCodec  *codec      = opaque->decoder->avctx->codec;
                 AVCodecContext *new_avctx  = avcodec_alloc_context3(codec);
                 int change_ret = 0;
-                if (!new_avctx)
+                if (!new_avctx || !frame) {
+                    avcodec_free_context(&new_avctx);
+                    av_frame_free(&frame);
                     return AVERROR(ENOMEM);
+                }
 
                 avcodec_parameters_to_context(new_avctx, opaque->codecpar);
                 av_freep(&new_avctx->extradata);
                 new_avctx->extradata = av_mallocz(size_data_size + AV_INPUT_BUFFER_PADDING_SIZE);
                 if (!new_avctx->extradata) {
                     avcodec_free_context(&new_avctx);
+                    av_frame_free(&frame);
                     return AVERROR(ENOMEM);
                 }
                 memcpy(new_avctx->extradata, size_data, size_data_size);
@@ -903,12 +936,14 @@ static int feed_input_buffer(JNIEnv *env, IJKFF_Pipenode *node, int64_t timeUs, 
                 av_dict_free(&codec_opts);
                 if (change_ret < 0) {
                     avcodec_free_context(&new_avctx);
+                    av_frame_free(&frame);
                     return change_ret;
                 }
 
-                change_ret = avcodec_decode_video2(new_avctx, frame, &got_picture, avpkt);
+                change_ret = amc_probe_decode(new_avctx, frame, avpkt);
                 if (change_ret < 0) {
                     avcodec_free_context(&new_avctx);
+                    av_frame_free(&frame);
                     return change_ret;
                 } else {
                     if (opaque->codecpar->width  != new_avctx->width &&
@@ -920,7 +955,7 @@ static int feed_input_buffer(JNIEnv *env, IJKFF_Pipenode *node, int64_t timeUs, 
                     }
                 }
 
-                av_frame_unref(frame);
+                av_frame_free(&frame);
                 avcodec_free_context(&new_avctx);
             }
         }
@@ -1647,7 +1682,7 @@ static int drain_output_buffer2(JNIEnv *env, IJKFF_Pipenode *node, int64_t timeU
                 }
             }
         }
-        ret = ffp_queue_picture(ffp, frame, pts, duration, av_frame_get_pkt_pos(frame), is->viddec.pkt_serial);
+        ret = ffp_queue_picture(ffp, frame, pts, duration, frame->pkt_pos, is->viddec.pkt_serial);
         if (ret) {
             if (frame->opaque)
                 SDL_VoutAndroid_releaseBufferProxyP(opaque->weak_vout, (SDL_AMediaCodecBufferProxy **)&frame->opaque, false);
@@ -1788,7 +1823,7 @@ static int func_run_sync(IJKFF_Pipenode *node)
                     }
                 }
             }
-            ret = ffp_queue_picture(ffp, frame, pts, duration, av_frame_get_pkt_pos(frame), is->viddec.pkt_serial);
+            ret = ffp_queue_picture(ffp, frame, pts, duration, frame->pkt_pos, is->viddec.pkt_serial);
             if (ret) {
                 if (frame->opaque)
                     SDL_VoutAndroid_releaseBufferProxyP(opaque->weak_vout, (SDL_AMediaCodecBufferProxy **)&frame->opaque, false);
