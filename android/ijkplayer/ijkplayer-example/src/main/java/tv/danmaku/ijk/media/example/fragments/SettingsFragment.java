@@ -17,6 +17,7 @@
 
 package tv.danmaku.ijk.media.example.fragments;
 
+import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.util.TypedValue;
@@ -31,7 +32,6 @@ import androidx.preference.ListPreference;
 import androidx.preference.Preference;
 import androidx.preference.PreferenceFragmentCompat;
 
-import tv.danmaku.ijk.media.example.BuildConfig;
 import tv.danmaku.ijk.media.example.R;
 import tv.danmaku.ijk.media.player.IjkMediaPlayer;
 
@@ -49,8 +49,7 @@ public class SettingsFragment extends PreferenceFragmentCompat {
     }
 
     /**
-     * 「第三方库」：Native 部分在运行时从 libijkplayer.so 读取实际链接的版本，
-     * Java 部分来自 build.gradle 中依赖列表生成的 BuildConfig.THIRD_PARTY_JAVA_LIBS。
+     * 「第三方库」：运行时从 libijkplayer.so 读取实际链接的 native 第三方库版本。
      */
     private void setupThirdPartyLibsPreference() {
         Preference pref = findPreference(getString(R.string.pref_key_third_party_libs));
@@ -72,7 +71,7 @@ public class SettingsFragment extends PreferenceFragmentCompat {
         int pad = dp(20);
         list.setPadding(pad, dp(8), pad, 0);
 
-        addSectionTitle(list, getString(R.string.third_party_libs_native), false);
+        addSectionTitle(list, getString(R.string.third_party_libs_native));
         String nativeVersions;
         try {
             nativeVersions = IjkMediaPlayer.getNativeLibraryVersions();
@@ -86,16 +85,6 @@ public class SettingsFragment extends PreferenceFragmentCompat {
             addLibItem(list, kv[0], kv.length > 1 ? kv[1] : "");
         }
 
-        addSectionTitle(list, getString(R.string.third_party_libs_java), true);
-        for (String lib : BuildConfig.THIRD_PARTY_JAVA_LIBS.split("\n")) {
-            // group:artifact:version → 名称 artifact，版本 version
-            String[] gav = lib.split(":");
-            if (gav.length == 3)
-                addLibItem(list, gav[1], gav[2]);
-            else
-                addLibItem(list, lib, "");
-        }
-
         ScrollView scroll = new ScrollView(requireContext());
         scroll.addView(list);
 
@@ -106,12 +95,12 @@ public class SettingsFragment extends PreferenceFragmentCompat {
                 .show();
     }
 
-    private void addSectionTitle(LinearLayout parent, String title, boolean withTopGap) {
+    private void addSectionTitle(LinearLayout parent, String title) {
         TextView tv = new TextView(requireContext());
         tv.setText(title);
         tv.setTypeface(Typeface.DEFAULT_BOLD);
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        tv.setPadding(0, withTopGap ? dp(16) : 0, 0, dp(4));
+        tv.setPadding(0, 0, 0, dp(4));
         parent.addView(tv);
     }
 
@@ -119,6 +108,8 @@ public class SettingsFragment extends PreferenceFragmentCompat {
     private void addLibItem(LinearLayout parent, String name, String version) {
         TextView nameView = new TextView(requireContext());
         nameView.setText(name);
+        nameView.setTextColor(Color.BLACK);
+        nameView.setTypeface(Typeface.DEFAULT_BOLD);
         nameView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         nameView.setPadding(0, dp(6), 0, 0);
         parent.addView(nameView);

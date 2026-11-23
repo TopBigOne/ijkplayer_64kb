@@ -66,5 +66,4 @@
     <string name="pref_title_third_party_libs">第三方库</string>
     <string name="pref_summary_third_party_libs">项目使用的第三方库及版本号</string>
     <string name="third_party_libs_native">Native（链接进 libijkplayer.so）</string>
-    <string name="third_party_libs_java">Java / Android</string>
 </resources>
