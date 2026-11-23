@@ -4,6 +4,7 @@ import android.app.AlertDialog;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.SharedPreferences;
+import android.content.res.Configuration;
 import android.os.Bundle;
 import android.text.InputType;
 import android.text.TextUtils;
@@ -22,6 +23,7 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 import tv.danmaku.ijk.media.example.R;
 import tv.danmaku.ijk.media.example.activities.VideoActivity;
@@ -72,9 +74,9 @@ public class SampleMediaListFragment extends Fragment {
 
         List<Row> rows = new ArrayList<>();
         if (mCategory.allowCustomUrl)
-            rows.add(new Row("输入自定义地址", null));
+            rows.add(new Row(getString(R.string.sample_custom_url_entry), null));
         for (SampleMediaCatalog.Item item : mCategory.items)
-            rows.add(new Row(item.name, item.url));
+            rows.add(new Row(getString(item.nameRes), item.url));
 
         mAdapter = new RowAdapter(rows);
         recyclerView.setAdapter(mAdapter);
@@ -85,9 +87,24 @@ public class SampleMediaListFragment extends Fragment {
         return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
-    /** 自定义地址按分类分别记住上次输入。 */
+    /** 自定义地址按分类分别记住上次输入；key 用分类徽标（各分类唯一，且不随语言变化）。 */
+    private String customUrlKey() {
+        return KEY_CUSTOM_URL_PREFIX + mCategory.badge;
+    }
+
     private String savedCustomUrl(Context context) {
-        return prefs(context).getString(KEY_CUSTOM_URL_PREFIX + mCategory.title, null);
+        SharedPreferences prefs = prefs(context);
+        String url = prefs.getString(customUrlKey(), null);
+        if (url == null) {
+            // 兼容旧版本：以前用中文分类标题作 key
+            Configuration zh = new Configuration(context.getResources().getConfiguration());
+            zh.setLocale(Locale.SIMPLIFIED_CHINESE);
+            String legacyTitle = context.createConfigurationContext(zh).getString(mCategory.titleRes);
+            url = prefs.getString(KEY_CUSTOM_URL_PREFIX + legacyTitle, null);
+            if (url != null)
+                prefs.edit().putString(customUrlKey(), url).apply();
+        }
+        return url;
     }
 
     private void onRowClicked(Context context, Row row) {
@@ -101,7 +118,7 @@ public class SampleMediaListFragment extends Fragment {
         final EditText input = new EditText(context);
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         input.setSingleLine(true);
-        input.setHint(mCategory.customUrlHint);
+        input.setHint(mCategory.customUrlHintRes);
         String saved = savedCustomUrl(context);
         if (!TextUtils.isEmpty(saved)) {
             input.setText(saved);
@@ -109,19 +126,19 @@ public class SampleMediaListFragment extends Fragment {
         }
 
         new AlertDialog.Builder(context)
-                .setTitle("输入播放地址")
+                .setTitle(R.string.sample_custom_url_dialog_title)
                 .setView(input)
                 .setNegativeButton(android.R.string.cancel, null)
-                .setPositiveButton("播放", new DialogInterface.OnClickListener() {
+                .setPositiveButton(R.string.sample_custom_url_play, new DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(DialogInterface dialog, int which) {
                         String url = input.getText().toString().trim();
                         if (url.isEmpty())
                             return;
-                        prefs(context).edit().putString(KEY_CUSTOM_URL_PREFIX + mCategory.title, url).apply();
+                        prefs(context).edit().putString(customUrlKey(), url).apply();
                         if (mAdapter != null)
                             mAdapter.notifyItemChanged(0);  // 自定义入口固定在第一行
-                        VideoActivity.intentTo(context, url, "自定义地址");
+                        VideoActivity.intentTo(context, url, context.getString(R.string.sample_custom_url_video_title));
                     }
                 })
                 .show();
@@ -184,7 +201,7 @@ public class SampleMediaListFragment extends Fragment {
                 name.setTextColor(custom ? color : ContextCompat.getColor(context, R.color.sample_text_primary));
 
                 String saved = custom ? savedCustomUrl(context) : null;
-                url.setText(custom ? (TextUtils.isEmpty(saved) ? mCategory.customUrlHint : saved) : row.url);
+                url.setText(custom ? (TextUtils.isEmpty(saved) ? context.getString(mCategory.customUrlHintRes) : saved) : row.url);
 
                 action.setText(custom ? "✎" : "▶");
                 action.setTextColor(color);

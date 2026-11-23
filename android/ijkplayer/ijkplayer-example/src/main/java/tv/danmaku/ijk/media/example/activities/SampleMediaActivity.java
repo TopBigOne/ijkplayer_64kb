@@ -59,7 +59,7 @@ public class SampleMediaActivity extends AppActivity  {
         int categoryIndex = getIntent().getIntExtra(EXTRA_CATEGORY, -1);
         SampleMediaCatalog.Category category = SampleMediaCatalog.category(categoryIndex);
         if (category != null)
-            setTitle(category.title);
+            setTitle(category.titleRes);
 
         if (savedInstanceState != null)
             return;  // 旋转等重建时 FragmentManager 会自动恢复

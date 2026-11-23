@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Sample 首页（测试链接目录）文案，英文；中文见 values-zh/strings_sample.xml -->
+<resources>
+    <!-- 分类 -->
+    <string name="sample_cat_ws_title">WebSocket Live</string>
+    <string name="sample_cat_ws_desc">Local streaming setup tools/ws-live.sh; 127.0.0.1 needs adb reverse, use a custom URL on LAN</string>
+    <string name="sample_cat_ws_custom_hint">ws://&lt;Mac LAN IP&gt;:18780/live/test.flv</string>
+
+    <string name="sample_cat_err_title">WebSocket Errors</string>
+    <string name="sample_cat_err_desc">Check onError codes: handshake rejected, connection refused, DNS failure, protocol mismatch</string>
+
+    <string name="sample_cat_hls_title">HLS VOD</string>
+    <string name="sample_cat_hls_desc">Official Apple / Mux test streams: adaptive bitrate, fMP4, HEVC</string>
+
+    <string name="sample_cat_mp4_title">HTTP VOD</string>
+    <string name="sample_cat_mp4_desc">Public MP4 files: https, seeking, H.264 / HEVC decoding</string>
+
+    <string name="sample_cat_file_title">Local Videos</string>
+    <string name="sample_cat_file_desc">Browse device storage and play a local file</string>
+
+    <string name="sample_cat_lan_title">LAN / Custom</string>
+    <string name="sample_cat_lan_desc">Intranet sources or any URL you type (http / rtmp / ws / file, etc.)</string>
+    <string name="sample_cat_lan_custom_hint">http://&lt;host&gt;/path/to/video.mp4</string>
+
+    <!-- WebSocket 拉流 -->
+    <string name="sample_ws_adb">ws-flv (adb reverse)</string>
+    <string name="sample_wss_adb">wss-flv (adb reverse, self-signed cert)</string>
+
+    <!-- WebSocket 异常场景 -->
+    <string name="sample_err_handshake">Handshake rejected: stream not found (502)</string>
+    <string name="sample_err_refused">Connection refused: no server on port (-5)</string>
+    <string name="sample_err_dns">DNS resolution failed (-5)</string>
+    <string name="sample_err_tls">wss to a plain ws port (TLS handshake fails)</string>
+
+    <!-- HLS -->
+    <string name="sample_hls_bipbop_4x3">Apple bipbop 4:3 multi-bitrate (TS)</string>
+    <string name="sample_hls_bipbop_16x9">Apple bipbop 16:9 multi-bitrate (TS)</string>
+    <string name="sample_hls_adv_fmp4">Apple advanced example (fMP4, H.264)</string>
+    <string name="sample_hls_adv_hevc">Apple advanced example (fMP4, HEVC)</string>
+    <string name="sample_hls_mux">Mux test stream (Tears of Steel, multi-bitrate)</string>
+
+    <!-- MP4 -->
+    <string name="sample_mp4_bbb_h264">Big Buck Bunny 1080p H.264 (10 s)</string>
+    <string name="sample_mp4_bbb_hevc">Big Buck Bunny 1080p HEVC (10 s)</string>
+    <string name="sample_mp4_jellyfish">Jellyfish 1080p H.264 (10 s)</string>
+    <string name="sample_mp4_sintel">Sintel trailer 720p</string>
+    <string name="sample_mp4_w3c_bunny">Big Buck Bunny (W3C, ~1 min)</string>
+
+    <!-- 局域网 -->
+    <string name="sample_lan_samba">Intranet samba 4.mp4</string>
+
+    <!-- 自定义地址 -->
+    <string name="sample_custom_url_entry">Enter a custom URL</string>
+    <string name="sample_custom_url_dialog_title">Enter playback URL</string>
+    <string name="sample_custom_url_play">Play</string>
+    <string name="sample_custom_url_video_title">Custom URL</string>
+</resources>

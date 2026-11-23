@@ -102,8 +102,8 @@ public class SampleCategoryListFragment extends Fragment {
                 float density = itemView.getResources().getDisplayMetrics().density;
                 badge.setText(c.badge);
                 badge.setBackground(roundRect(c.color, 12 * density));
-                title.setText(c.title);
-                description.setText(c.description);
+                title.setText(c.titleRes);
+                description.setText(c.descriptionRes);
                 count.setVisibility(c.opensFileBrowser ? View.GONE : View.VISIBLE);
                 count.setText(String.valueOf(c.items.size()));
                 count.setTextColor(c.color);
