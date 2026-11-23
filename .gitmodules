@@ -1,3 +1,4 @@
 [submodule "FFToolChain"]
 	path = FFToolChain
-	url = https://github.com/debugly/MRFFToolChainBuildShell.git
+	url = git@github.com:TopBigOne/MRFFToolChainBuildShell.git
+	branch = ijk-custom
