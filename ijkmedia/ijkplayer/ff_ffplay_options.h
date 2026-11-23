@@ -206,6 +206,21 @@ static const AVOption ffp_context_options[] = {
         OPTION_OFFSET(ijkmeta_delay_init),      OPTION_INT(0, 0, 1) },
     { "render-wait-start",          "render wait start",
         OPTION_OFFSET(render_wait_start),      OPTION_INT(0, 0, 1) },
+
+    { "av-sync-type",               "master clock: 0 audio, 1 video, 2 external",
+        OPTION_OFFSET(av_sync_type),           OPTION_INT(AV_SYNC_AUDIO_MASTER, AV_SYNC_AUDIO_MASTER, AV_SYNC_EXTERNAL_CLOCK) },
+
+    // 直播低延迟：追帧
+    { "live-chase",                 "live: speed up playback when buffered too much",
+        OPTION_OFFSET(live_chase),             OPTION_INT(0, 0, 1) },
+    { "live-chase-start-ms",        "live: start chasing when buffered duration exceeds this (ms)",
+        OPTION_OFFSET(live_chase_start_ms),    OPTION_INT(500, 50, 60000) },
+    { "live-chase-stop-ms",         "live: stop chasing when buffered duration drops below this (ms)",
+        OPTION_OFFSET(live_chase_stop_ms),     OPTION_INT(200, 0, 60000) },
+    { "live-chase-rate",            "live: chasing playback rate in percent",
+        OPTION_OFFSET(live_chase_rate),        OPTION_INT(120, 101, 200) },
+    { "live-drop-ms",               "live: drop buffer and jump to next key frame when buffered exceeds this (ms), 0 to disable",
+        OPTION_OFFSET(live_drop_ms),           OPTION_INT(0, 0, 600000) },
     { NULL }
 };
 

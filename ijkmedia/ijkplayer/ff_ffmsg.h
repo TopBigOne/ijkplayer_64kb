@@ -106,4 +106,11 @@
 #define FFP_PROP_INT64_SHARE_CACHE_DATA                 20210
 #define FFP_PROP_INT64_IMMEDIATE_RECONNECT              20211
 
+/* 直播延迟：端到端延迟（推流端 SEI 时间戳，毫秒，没有 SEI 时为 -1）、本机时钟校正、追帧状态 */
+#define FFP_PROP_INT64_E2E_LATENCY                      20400
+#define FFP_PROP_INT64_E2E_CLOCK_OFFSET                 20401
+#define FFP_PROP_INT64_LIVE_CHASING                     20402
+#define FFP_PROP_INT64_LIVE_DROP_COUNT                  20403
+#define FFP_PROP_INT64_E2E_RECV_LATENCY                 20404
+
 #endif

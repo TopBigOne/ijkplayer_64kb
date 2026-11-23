@@ -295,6 +295,18 @@ typedef struct VideoState {
     struct IjkWsContext *ws;
     AVIOContext *ws_avio;
 
+    /* 端到端延迟：推流端 SEI 时间戳，读包线程写入、显示线程查询（见 ff_e2e_latency.h） */
+    SDL_mutex *e2e_mutex;
+    struct { double pts; int64_t wall_ms; } e2e_ring[64];
+    int e2e_ring_head;
+    int e2e_ring_count;
+    double e2e_last_display_pts;
+    int64_t e2e_last_log_us;
+
+    /* 直播追帧 */
+    int live_chasing;       /* 正在加速播放 */
+    int live_drop_pending;  /* 已清空缓冲，丢视频包直到下一个关键帧 */
+
     Clock audclk;
     Clock vidclk;
     Clock extclk;
@@ -520,6 +532,11 @@ typedef struct FFStatistic
     int drop_frame_count;
     int decode_frame_count;
     float drop_frame_rate;
+    int64_t e2e_latency_ms;     /* 最近一次显示帧的端到端延迟 */
+    int64_t e2e_update_us;      /* 上次更新时间（av_gettime_relative），0 表示从未收到 SEI */
+    int64_t e2e_recv_latency_ms;/* 读到视频包时的延迟（网络 + 服务器段） */
+    int64_t e2e_recv_update_us;
+    int64_t live_drop_count;    /* 追帧丢 GOP 的次数 */
 } FFStatistic;
 
 #define FFP_TCP_READ_SAMPLE_RANGE 2000
@@ -724,6 +741,14 @@ typedef struct FFPlayer {
     char *mediacodec_default_name;
     int ijkmeta_delay_init;
     int render_wait_start;
+
+    /* 直播低延迟（选项） */
+    int live_chase;             /* 缓冲超过 live_chase_start_ms 时按 live_chase_rate 加速 */
+    int live_chase_start_ms;
+    int live_chase_stop_ms;
+    int live_chase_rate;        /* 百分比，120 表示 1.2 倍速 */
+    int live_drop_ms;           /* 缓冲超过该值时直接清空并跳到下一个关键帧，0 关闭 */
+    int64_t e2e_clock_offset_ms;/* NTP 时间 - 本机时间，由上层校时后设置 */
 } FFPlayer;
 
 #define fftime_to_milliseconds(ts) (av_rescale(ts, 1000, AV_TIME_BASE))
@@ -834,6 +859,12 @@ inline static void ffp_reset_internal(FFPlayer *ffp)
     ffp->mediacodec_default_name        = NULL; // option
     ffp->ijkmeta_delay_init             = 0; // option
     ffp->render_wait_start              = 0;
+    ffp->live_chase                     = 0; // option
+    ffp->live_chase_start_ms            = 500; // option
+    ffp->live_chase_stop_ms             = 200; // option
+    ffp->live_chase_rate                = 120; // option
+    ffp->live_drop_ms                   = 0; // option
+    ffp->e2e_clock_offset_ms            = 0;
 
     ijkmeta_reset(ffp->meta);
 

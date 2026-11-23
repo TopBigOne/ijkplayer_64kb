@@ -140,6 +140,14 @@ public final class IjkMediaPlayer extends AbstractMediaPlayer {
     public static final int FFP_PROP_INT64_TCP_SPEED                        = 20200;
     public static final int FFP_PROP_INT64_LATEST_SEEK_LOAD_DURATION        = 20300;
     public static final int FFP_PROP_INT64_IMMEDIATE_RECONNECT              = 20211;
+    /** 端到端延迟（毫秒），没有收到推流端时间戳 SEI 时为 -1 */
+    public static final int FFP_PROP_INT64_E2E_LATENCY                      = 20400;
+    /** 本机时钟校正（毫秒）= NTP 时间 - 本机时间 */
+    public static final int FFP_PROP_INT64_E2E_CLOCK_OFFSET                 = 20401;
+    public static final int FFP_PROP_INT64_LIVE_CHASING                     = 20402;
+    public static final int FFP_PROP_INT64_LIVE_DROP_COUNT                  = 20403;
+    /** 到达延迟（毫秒）：读到视频包时刻 - 推流端 SEI 时刻，没有 SEI 时为 -1 */
+    public static final int FFP_PROP_INT64_E2E_RECV_LATENCY                 = 20404;
     //----------------------------------------
 
     @AccessedByNative
@@ -826,6 +834,38 @@ public final class IjkMediaPlayer extends AbstractMediaPlayer {
 
     public long getFileSize() {
         return _getPropertyLong(FFP_PROP_INT64_LOGICAL_FILE_SIZE, 0);
+    }
+
+    /**
+     * 端到端延迟（毫秒）：画面送显时刻 - 推流端写入 SEI 的时刻。
+     * 需要推流端在视频帧里插入时间戳 SEI（UUID "AIJK_E2E_LATENCY"，见 tools/latency/flv_sei_inject.py）；
+     * 3 秒内没有收到这种 SEI 时返回 -1。两端时钟不同步会直接算进结果，所以要配合 {@link #setE2eClockOffset(long)}。
+     */
+    public long getE2eLatency() {
+        return _getPropertyLong(FFP_PROP_INT64_E2E_LATENCY, -1);
+    }
+
+    /**
+     * 到达延迟（毫秒）：播放器读到视频包的时刻 - 推流端 SEI 时刻，只含推流、服务器、网络这几段。
+     * 端到端延迟减去它，就是播放端（缓冲 + 解码 + 同步 + 渲染）花的时间。没有 SEI 时返回 -1。
+     */
+    public long getE2eRecvLatency() {
+        return _getPropertyLong(FFP_PROP_INT64_E2E_RECV_LATENCY, -1);
+    }
+
+    /** 设置本机时钟校正：offsetMs = NTP 时间 - System.currentTimeMillis()。随时可以调用。 */
+    public void setE2eClockOffset(long offsetMs) {
+        _setPropertyLong(FFP_PROP_INT64_E2E_CLOCK_OFFSET, offsetMs);
+    }
+
+    /** 是否正在追帧加速（需要开启 player 选项 live-chase） */
+    public boolean isLiveChasing() {
+        return _getPropertyLong(FFP_PROP_INT64_LIVE_CHASING, 0) != 0;
+    }
+
+    /** 因缓冲超过 live-drop-ms 而丢掉整段缓冲、跳到关键帧的次数 */
+    public long getLiveDropCount() {
+        return _getPropertyLong(FFP_PROP_INT64_LIVE_DROP_COUNT, 0);
     }
 
     public long getBitRate() {

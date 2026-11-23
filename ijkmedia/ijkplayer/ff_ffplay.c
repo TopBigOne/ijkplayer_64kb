@@ -97,6 +97,7 @@
 
 // static const AVOption ffp_context_options[] = ...
 #include "ff_ffplay_options.h"
+#include "ff_e2e_latency.h"
 
 static AVPacket flush_pkt;
 
@@ -901,6 +902,7 @@ static void video_image_display2(FFPlayer *ffp)
             }
         }
         SDL_VoutDisplayYUVOverlay(ffp->vout, vp->bmp);
+        ffp_e2e_on_display(ffp, vp->pts);
         ffp->stat.vfps = SDL_SpeedSamplerAdd(&ffp->vfps_sampler, FFP_SHOW_VFPS_FFPLAY, "vfps[ffplay]");
         if (!ffp->first_video_frame_rendered) {
             ffp->first_video_frame_rendered = 1;
@@ -1044,6 +1046,7 @@ static void stream_close(FFPlayer *ffp)
     SDL_DestroyCond(is->audio_accurate_seek_cond);
     SDL_DestroyCond(is->video_accurate_seek_cond);
     SDL_DestroyCond(is->continue_read_thread);
+    SDL_DestroyMutexP(&is->e2e_mutex);
     SDL_DestroyMutex(is->accurate_seek_mutex);
     SDL_DestroyMutex(is->play_mutex);
 #if !CONFIG_AVFILTER
@@ -1366,6 +1369,12 @@ retry:
             /* compute nominal last_duration */
             last_duration = vp_duration(is, lastvp, vp);
             delay = compute_target_delay(ffp, last_duration, is);
+            /* 直播追帧，视频为主时钟时直接缩短帧间隔：
+             *   - 包队列积压（live_chasing）
+             *   - 帧队列里还有帧在排队：网络抖动后几帧一起到，按正常节奏放会把这几帧的落后一直留着 */
+            if (ffp->live_chase && get_master_sync_type(is) == AV_SYNC_VIDEO_MASTER &&
+                (is->live_chasing || frame_queue_nb_remaining(&is->pictq) > 1))
+                delay /= ffp->live_chase_rate / 100.0;
 
             time= av_gettime_relative()/1000000.0;
             if (isnan(is->frame_timer) || time < is->frame_timer)
@@ -3058,6 +3067,87 @@ static int stream_has_enough_packets(AVStream *st, int stream_id, PacketQueue *q
            queue->nb_packets > min_frames;
 }
 
+/*
+ * 直播追帧：读包线程每读一个包调用一次。
+ *   缓冲 > live_drop_ms        ：清空音视频包队列，丢视频包直到下一个关键帧（画面会跳一下）
+ *   缓冲 > live_chase_start_ms ：按 live_chase_rate 加速播放，降到 live_chase_stop_ms 以下恢复 1 倍速
+ * 缓冲 = 音视频包队列里时长较大的那个；视频为主时钟时只看视频。
+ */
+static void live_set_chasing(FFPlayer *ffp, int on)
+{
+    VideoState *is = ffp->is;
+    double rate = on ? ffp->live_chase_rate / 100.0 : 1.0;
+
+    is->live_chasing = on;
+    switch (get_master_sync_type(is)) {
+        case AV_SYNC_AUDIO_MASTER:
+            ffp_set_playback_rate(ffp, (float)rate);   /* 音频变速，视频跟着音频时钟走 */
+            break;
+        case AV_SYNC_EXTERNAL_CLOCK:
+            set_clock_speed(&is->extclk, rate);        /* 纯视频流：外部时钟变速 */
+            break;
+        default:
+            break;                                     /* 视频为主时钟：在 video_refresh 里缩短帧间隔 */
+    }
+    av_log(ffp, AV_LOG_INFO, "live chase: %s (rate %.2f, vcache %"PRId64" ms, acache %"PRId64" ms)\n",
+           on ? "start" : "stop", rate, ffp->stat.video_cache.duration, ffp->stat.audio_cache.duration);
+}
+
+static void live_latency_control(FFPlayer *ffp)
+{
+    VideoState *is = ffp->is;
+    int64_t cached = 0;
+
+    if (is->paused || is->live_drop_pending)
+        return;
+    if ((is->video_st && !ffp->first_video_frame_rendered) || (is->audio_st && !ffp->first_audio_frame_rendered))
+        return;   /* 首帧出来之前不干预 */
+
+    if (is->video_st)
+        cached = FFMAX(cached, ffp->stat.video_cache.duration);
+    /* 视频为主时钟时音频是从属（加速时音频照常 1 倍速，会越积越多），只看视频缓冲 */
+    if (is->audio_st && get_master_sync_type(is) != AV_SYNC_VIDEO_MASTER)
+        cached = FFMAX(cached, ffp->stat.audio_cache.duration);
+
+    if (ffp->live_drop_ms > 0 && cached > ffp->live_drop_ms) {
+        av_log(ffp, AV_LOG_WARNING, "live drop: buffered %"PRId64" ms > %d ms, flush and wait for key frame\n",
+               cached, ffp->live_drop_ms);
+        /* 和 seek 一样：清空包队列并放 flush 包，解码器随之 flush，
+         * 已解码但还没显示的旧帧（包括解码器里因 B 帧重排压着的帧）按序号作废，不会晚几秒再冒出来 */
+        if (is->video_stream >= 0) {
+            packet_queue_flush(&is->videoq);
+            packet_queue_put(&is->videoq, &flush_pkt);
+        }
+        if (is->audio_stream >= 0) {
+            packet_queue_flush(&is->audioq);
+            packet_queue_put(&is->audioq, &flush_pkt);
+        }
+        is->live_drop_pending = is->video_st ? 1 : 0;   /* 纯音频：清空就够了 */
+        ffp->stat.live_drop_count++;
+        ffp_statistic_l(ffp);
+        return;
+    }
+
+    if (ffp->live_chase) {
+        if (!is->live_chasing && cached > ffp->live_chase_start_ms)
+            live_set_chasing(ffp, 1);
+        else if (is->live_chasing && cached < ffp->live_chase_stop_ms)
+            live_set_chasing(ffp, 0);
+    }
+}
+
+/* 丢 GOP 期间：返回 1 表示这个包要丢掉 */
+static int live_drop_filter(VideoState *is, AVPacket *pkt)
+{
+    if (pkt->stream_index == is->video_stream) {
+        if (!(pkt->flags & AV_PKT_FLAG_KEY))
+            return 1;
+        is->live_drop_pending = 0;   /* 关键帧到了，从这里恢复 */
+        return 0;
+    }
+    return pkt->stream_index == is->audio_stream;   /* 音频一起丢，保持音画对齐 */
+}
+
 static int is_realtime(AVFormatContext *s)
 {
     if(   !strcmp(s->iformat->name, "rtp")
@@ -3646,10 +3736,15 @@ static int read_thread(void *arg)
                 av_q2d(ic->streams[pkt->stream_index]->time_base) -
                 (double)(ffp->start_time != AV_NOPTS_VALUE ? ffp->start_time : 0) / 1000000
                 <= ((double)ffp->duration / 1000000);
+        if (is->live_drop_pending && live_drop_filter(is, pkt)) {
+            av_packet_unref(pkt);
+            continue;
+        }
         if (pkt->stream_index == is->audio_stream && pkt_in_play_range) {
             packet_queue_put(&is->audioq, pkt);
         } else if (pkt->stream_index == is->video_stream && pkt_in_play_range
                    && !(is->video_st && (is->video_st->disposition & AV_DISPOSITION_ATTACHED_PIC))) {
+            ffp_e2e_on_video_packet(ffp, is, pkt, is->video_st);
             packet_queue_put(&is->videoq, pkt);
         } else if (pkt->stream_index == is->subtitle_stream && pkt_in_play_range) {
             packet_queue_put(&is->subtitleq, pkt);
@@ -3658,6 +3753,8 @@ static int read_thread(void *arg)
         }
 
         ffp_statistic_l(ffp);
+        if (ffp->live_chase || ffp->live_drop_ms > 0)
+            live_latency_control(ffp);
 
         if (ffp->ijkmeta_delay_init && !init_ijkmeta &&
                 (ffp->first_video_frame_rendered || !is->video_st) && (ffp->first_audio_frame_rendered || !is->audio_st)) {
@@ -3735,6 +3832,9 @@ static VideoState *stream_open(FFPlayer *ffp, const char *filename, AVInputForma
         av_log(NULL, AV_LOG_FATAL, "SDL_CreateCond(): %s\n", SDL_GetError());
         goto fail;
     }
+
+    is->e2e_mutex = SDL_CreateMutex();   /* 失败时只是不统计端到端延迟 */
+    is->e2e_last_display_pts = NAN;
 
     if (!(is->video_accurate_seek_cond = SDL_CreateCond())) {
         av_log(NULL, AV_LOG_FATAL, "SDL_CreateCond(): %s\n", SDL_GetError());
@@ -5075,6 +5175,16 @@ int64_t ffp_get_property_int64(FFPlayer *ffp, int id, int64_t default_value)
             if (!ffp)
                 return default_value;
             return ffp->stat.logical_file_size;
+        case FFP_PROP_INT64_E2E_LATENCY:
+            return ffp ? ffp_e2e_get_latency(ffp) : default_value;
+        case FFP_PROP_INT64_E2E_CLOCK_OFFSET:
+            return ffp ? ffp->e2e_clock_offset_ms : default_value;
+        case FFP_PROP_INT64_E2E_RECV_LATENCY:
+            return ffp ? ffp_e2e_get_recv_latency(ffp) : default_value;
+        case FFP_PROP_INT64_LIVE_CHASING:
+            return (ffp && ffp->is) ? ffp->is->live_chasing : default_value;
+        case FFP_PROP_INT64_LIVE_DROP_COUNT:
+            return ffp ? ffp->stat.live_drop_count : default_value;
         default:
             return default_value;
     }
@@ -5098,6 +5208,11 @@ void ffp_set_property_int64(FFPlayer *ffp, int id, int64_t value)
             if (ffp) {
                 ijkio_manager_immediate_reconnect(ffp->ijkio_manager_ctx);
             }
+            break;
+        case FFP_PROP_INT64_E2E_CLOCK_OFFSET:
+            if (ffp)
+                ffp->e2e_clock_offset_ms = value;
+            break;
         default:
             break;
     }
