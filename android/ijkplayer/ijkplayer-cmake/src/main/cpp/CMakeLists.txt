@@ -107,6 +107,11 @@ add_library(${CMAKE_PROJECT_NAME}
 # ============================================================
 target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "-Wl,-z,max-page-size=16384")
 
+# FFmpeg 7 预编译包启用了 aarch64 NEON 汇编，汇编中以 PC 相对寻址引用 ff_tx_tab_* 等全局表；
+# 链接进 .so 时这些符号默认可被抢占，lld 会拒绝该类重定位。
+# -Bsymbolic 让库内符号在库内直接绑定（FFmpeg 自身构建动态库时同样使用），libijkplayer.so 不依赖符号抢占。
+target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "-Wl,-Bsymbolic")
+
 # ============================================================
 # 第三方预编译静态库路径（按 ABI 区分目录）
 # 所有第三方库均以预编译静态库（.a）形式提供，
