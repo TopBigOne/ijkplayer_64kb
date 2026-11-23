@@ -22,14 +22,21 @@
  */
 
 #include "libavformat/avformat.h"
+#include "libavformat/demux.h"
 #include "libavformat/url.h"
 #include "libavformat/version.h"
 
+/*
+ * FFmpeg 7：demuxer/protocol 列表在编译期固定，不再支持运行时 av_register_input_format。
+ * FFToolChain/patches/ffmpeg-n7.1.1 在 FFmpeg 内部预留了同名占位（ff_ijkxxx_protocol /
+ * ff_ijkxxx_demuxer）并导出 ijkav_register_xxx_*()，这里把 ijkmedia 的真实实现 memcpy 覆盖进去。
+ * 注意 demuxer 的结构体已改为内部的 FFInputFormat（大小校验也按 FFInputFormat）。
+ */
 #define IJK_REGISTER_DEMUXER(x)                                         \
     {                                                                   \
-        extern AVInputFormat ijkff_##x##_demuxer;                       \
-        int ijkav_register_##x##_demuxer(AVInputFormat *demuxer, int demuxer_size);   \
-        ijkav_register_##x##_demuxer(&ijkff_##x##_demuxer, sizeof(AVInputFormat));    \
+        extern FFInputFormat ijkff_##x##_demuxer;                       \
+        int ijkav_register_##x##_demuxer(FFInputFormat *demuxer, int demuxer_size);   \
+        ijkav_register_##x##_demuxer(&ijkff_##x##_demuxer, sizeof(FFInputFormat));    \
     }
 
 #define IJK_REGISTER_PROTOCOL(x)                                        \
@@ -39,31 +46,6 @@
         ijkav_register_##x##_protocol(&ijkimp_ff_##x##_protocol, sizeof(URLProtocol));  \
     }
 
-static struct AVInputFormat *ijkav_find_input_format(const char *iformat_name)
-{
-    AVInputFormat *fmt = NULL;
-    if (!iformat_name)
-        return NULL;
-    while ((fmt = av_iformat_next(fmt))) {
-        if (!fmt->name)
-            continue;
-        if (!strcmp(iformat_name, fmt->name))
-            return fmt;
-    }
-    return NULL;
-}
-
-static void ijkav_register_input_format(AVInputFormat *iformat)
-{
-    if (ijkav_find_input_format(iformat->name)) {
-        av_log(NULL, AV_LOG_WARNING, "skip     demuxer : %s (duplicated)\n", iformat->name);
-    } else {
-        av_log(NULL, AV_LOG_INFO,    "register demuxer : %s\n", iformat->name);
-        av_register_input_format(iformat);
-    }
-}
-
-
 void ijkav_register_all(void)
 {
     static int initialized;
@@ -72,16 +54,17 @@ void ijkav_register_all(void)
         return;
     initialized = 1;
 
-    av_register_all();
-
     /* protocols */
     av_log(NULL, AV_LOG_INFO, "===== custom modules begin =====\n");
 #ifdef __ANDROID__
     IJK_REGISTER_PROTOCOL(ijkmediadatasource);
 #endif
     IJK_REGISTER_PROTOCOL(ijkio);
-    IJK_REGISTER_PROTOCOL(async);
-    IJK_REGISTER_PROTOCOL(ijklongurl);
+    /*
+     * async：FFmpeg 7 自带官方 async 协议，补丁未预留 ijk 版的注册入口，直接使用官方实现
+     *        （ijk 版 ijkasync.c 额外上报的 async 缓冲统计 FFP_PROP_INT64_ASYNC_STATISTIC_* 将无数据）。
+     * ijklongurl：FFmpeg 4.1+ 的 URL 已改为动态长度（AVFormatContext.url），不再需要长 URL 改写。
+     */
     IJK_REGISTER_PROTOCOL(ijktcphook);
     IJK_REGISTER_PROTOCOL(ijkhttphook);
     IJK_REGISTER_PROTOCOL(ijksegment);

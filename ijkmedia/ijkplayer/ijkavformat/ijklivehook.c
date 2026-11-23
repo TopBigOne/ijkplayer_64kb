@@ -21,13 +21,14 @@
 
 #include "libavformat/avformat.h"
 #include "libavformat/url.h"
+#include "libavformat/demux.h"
 #include "libavutil/avstring.h"
 #include "libavutil/opt.h"
 
 #include "ijkplayer/ijkavutil/opt.h"
 
 #include "ijkavformat.h"
-#include "libavutil/application.h"
+#include "libavformat/application.h"
 
 typedef struct {
     AVClass         *class;
@@ -72,7 +73,7 @@ fail:
     return ret;
 }
 
-static int ijklivehook_probe(AVProbeData *probe)
+static int ijklivehook_probe(const AVProbeData *probe)
 {
     if (av_strstart(probe->filename, "ijklivehook:", NULL))
         return AVPROBE_SCORE_MAX;
@@ -192,7 +193,7 @@ static int ijklivehook_read_header(AVFormatContext *avf, AVDictionary **options)
     int         ret         = -1;
 
     c->app_ctx = (AVApplicationContext *)av_dict_strtoptr(c->app_ctx_intptr);
-    av_strstart(avf->filename, "ijklivehook:", &inner_url);
+    av_strstart(avf->url, "ijklivehook:", &inner_url);
 
     c->io_control.size = sizeof(c->io_control);
     strlcpy(c->io_control.url, inner_url, sizeof(c->io_control.url));
@@ -306,14 +307,15 @@ static const AVClass ijklivehook_class = {
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
-AVInputFormat ijkff_ijklivehook_demuxer = {
-    .name           = "ijklivehook",
-    .long_name      = "Live Hook Controller",
-    .flags          = AVFMT_NOFILE | AVFMT_TS_DISCONT,
+/* FFmpeg 7：demuxer 回调移到内部结构 FFInputFormat，公开字段放在 .p 中 */
+FFInputFormat ijkff_ijklivehook_demuxer = {
+    .p.name         = "ijklivehook",
+    .p.long_name    = "Live Hook Controller",
+    .p.flags        = AVFMT_NOFILE | AVFMT_TS_DISCONT,
+    .p.priv_class   = &ijklivehook_class,
     .priv_data_size = sizeof(Context),
     .read_probe     = ijklivehook_probe,
     .read_header2   = ijklivehook_read_header,
     .read_packet    = ijklivehook_read_packet,
     .read_close     = ijklivehook_read_close,
-    .priv_class     = &ijklivehook_class,
 };

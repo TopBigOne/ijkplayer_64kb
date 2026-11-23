@@ -4429,17 +4429,8 @@ int ffp_prepare_async_l(FFPlayer *ffp, const char *file_name)
         av_dict_set(&ffp->format_opts, "timeout", NULL, 0);
     }
 
-    /* there is a length limit in avformat */
-    /* ws/wss 走 ijkws 自定义 AVIO，不经 FFmpeg 协议层，保留原始长 URL 不改写 */
-    if (strlen(file_name) + 1 > 1024 &&
-        !av_stristart(file_name, "ws://", NULL) &&
-        !av_stristart(file_name, "wss://", NULL)) {
-        av_log(ffp, AV_LOG_ERROR, "%s too long url\n", __func__);
-        if (avio_find_protocol_name("ijklongurl:")) {
-            av_dict_set(&ffp->format_opts, "ijklongurl-url", file_name, 0);
-            file_name = "ijklongurl:";
-        }
-    }
+    /* FFmpeg 4.1+ 的 AVFormatContext.url / URLContext.filename 已是动态长度，
+     * 不再有 1024 字节限制，原 ijklongurl 长 URL 改写已移除。 */
 
     av_log(NULL, AV_LOG_INFO, "===== versions =====\n");
     ffp_show_version_str(ffp, "ijkplayer     ",      ijk_version_info());

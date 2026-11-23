@@ -107,14 +107,25 @@ target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "-Wl,-z,max-page-size=16384")
 # 所有第三方库均以预编译静态库（.a）形式提供，
 # 最终会被静态链接进 libijkplayer.so，无需额外分发独立 .so。
 # ============================================================
-set(FFMPEG_LIB_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/third-libs/ijkffmpeg/ijkffmpeg-${ARCH}/lib)
+# FFmpeg 7（迁移中，临时方案）：使用 MRFFToolChain 的 ffmpeg7 预编译包
+#   官方 n7.1.x + FFToolChain/patches/ffmpeg-n7.1.1（restore-ijk-* 补丁）
+#   安装：FFToolChain/main.sh install -p android -l ffmpeg7  → FFToolChain/product/android/universal/
+# 预编译包按 fsplayer 的 module-full 配置编译，自带 OpenSSL 3.5 及 dav1d/bluray/smb2 等依赖；
+# 后续将换成源码编译的 lite 版（OpenSSL 1.1.1w、去掉多余依赖）。
+set(FF7_ROOT           ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../../FFToolChain/product/android/universal)
+set(FFMPEG_LIB_DIR     ${FF7_ROOT}/ffmpeg/ffmpeg-${ARCH}/lib)
+# OpenSSL 仍链接 1.1.1w（不用预编译包自带的 3.5）：ijkws.c 会直接调用 OpenSSL API 操作
+# libijkwebsockets.so 内部（1.1.1w）的 SSL 对象，两边版本必须一致。
+# ffmpeg7 引用的 35 个 OpenSSL 符号在 1.1.1w 中均存在；唯一签名变化是 SSL_CTX_set_options
+# （3.x: uint64_t / 1.1.1: unsigned long），arm64 上一致，armv7a 上参数传递不一致。
+# TODO(ffmpeg7): 换成用 OpenSSL 1.1.1w 源码编译的 lite 版 FFmpeg 后消除该差异。
 set(OPENSSL_LIB_DIR    ${CMAKE_CURRENT_SOURCE_DIR}/third-libs/openssl/openssl-${ARCH}/lib)
 set(SOUNDTOUCH_LIB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third-libs/soundtouch/soundtouch-${ARCH}/lib)
 set(YUV_LIB_DIR        ${CMAKE_CURRENT_SOURCE_DIR}/third-libs/yuv/yuv-${ARCH}/lib)
 
 # 第三方库头文件路径（FFmpeg、SoundTouch、libyuv）
 include_directories(
-    third-libs/ijkffmpeg/ijkffmpeg-${ARCH}/include
+    ${FF7_ROOT}/ffmpeg/ffmpeg-${ARCH}/include
     third-libs/soundtouch/soundtouch-${ARCH}/include
     third-libs/yuv/yuv-${ARCH}/include
 )
@@ -166,6 +177,27 @@ target_link_libraries(ijkffmpeg-lib INTERFACE
     ${FFMPEG_LIB_DIR}/libswscale.a    # 图像缩放与色彩转换
     ${FFMPEG_LIB_DIR}/libavutil.a     # 公共工具函数库（必须放最后）
 )
+
+# ffmpeg7 预编译包的外部依赖（见 libavformat.pc / libavcodec.pc 的 Libs）
+# 静态库之间存在相互引用，用 --start-group/--end-group 让链接器反复解析
+target_link_libraries(ijkffmpeg-lib INTERFACE
+    -Wl,--start-group
+    ${FF7_ROOT}/bluray/bluray-${ARCH}/lib/libbluray.a
+    ${FF7_ROOT}/dvdnav/dvdnav-${ARCH}/lib/libdvdnav.a
+    ${FF7_ROOT}/dvdread/dvdread-${ARCH}/lib/libdvdread.a
+    ${FF7_ROOT}/xml2/xml2-${ARCH}/lib/libxml2.a
+    ${FF7_ROOT}/dav1d/dav1d-${ARCH}/lib/libdav1d.a
+    ${FF7_ROOT}/uavs3d/uavs3d-${ARCH}/lib/libuavs3d.a
+    ${FF7_ROOT}/opus/opus-${ARCH}/lib/libopus.a
+    -Wl,--end-group
+    mediandk atomic dl
+)
+# smb2 在预编译包里是动态库，需随 APK 一起打包
+add_library(smb2-lib SHARED IMPORTED)
+set_target_properties(smb2-lib PROPERTIES
+    IMPORTED_LOCATION ${FF7_ROOT}/smb2/smb2-${ARCH}/lib/libsmb2.so
+)
+target_link_libraries(ijkffmpeg-lib INTERFACE smb2-lib)
 
 # ============================================================
 # libwebsockets 动态库（ws/wss 收流，供 ijkavformat/ijkws.c 使用）
