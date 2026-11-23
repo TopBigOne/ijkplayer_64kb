@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 设置页「直播延迟」分组 -->
+<resources>
+    <string name="pref_title_live_latency">直播延迟</string>
+    <string name="pref_title_live_low_latency">低延迟模式</string>
+    <string name="pref_summary_live_low_latency">不做启动缓冲、不限制缓冲上限、nobuffer、缩短探测时长。只用于直播</string>
+    <string name="pref_title_live_video_master">以视频为主时钟</string>
+    <string name="pref_summary_live_video_master">画面不再等音频输出缓冲，音频跟着视频调整。安防等以画面为主的场景使用</string>
+    <string name="pref_title_live_chase">追帧</string>
+    <string name="pref_summary_live_chase">缓冲超过 500ms 时 1.2 倍速播放，降到 200ms 以下恢复正常速度</string>
+    <string name="pref_title_live_drop_ms">缓冲超过该值时直接跳到关键帧</string>
+    <string-array name="pref_entries_live_drop_ms">
+        <item>关闭</item>
+        <item>1 秒</item>
+        <item>2 秒</item>
+        <item>3 秒</item>
+        <item>5 秒</item>
+    </string-array>
+    <string name="pref_title_latency_target_ms">HUD 延迟告警阈值</string>
+    <string-array name="pref_entries_latency_target_ms">
+        <item>200 ms</item>
+        <item>300 ms</item>
+        <item>500 ms</item>
+        <item>1 秒</item>
+    </string-array>
+    <string name="pref_title_ntp_server">NTP 服务器（端到端延迟校时，留空不校时）</string>
+</resources>

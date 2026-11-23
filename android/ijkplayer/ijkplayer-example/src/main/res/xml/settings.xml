@@ -53,6 +53,48 @@
             android:summary="@string/pref_summary_using_opensl_es"
             android:title="@string/pref_title_using_opensl_es" />
     </PreferenceCategory>
+    <PreferenceCategory android:title="@string/pref_title_live_latency">
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="@string/pref_key_live_low_latency"
+            android:persistent="true"
+            android:summary="@string/pref_summary_live_low_latency"
+            android:title="@string/pref_title_live_low_latency" />
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="@string/pref_key_live_video_master"
+            android:persistent="true"
+            android:summary="@string/pref_summary_live_video_master"
+            android:title="@string/pref_title_live_video_master" />
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="@string/pref_key_live_chase"
+            android:persistent="true"
+            android:summary="@string/pref_summary_live_chase"
+            android:title="@string/pref_title_live_chase" />
+        <ListPreference
+            android:defaultValue="0"
+            android:entries="@array/pref_entries_live_drop_ms"
+            android:entryValues="@array/pref_entry_values_live_drop_ms"
+            android:key="@string/pref_key_live_drop_ms"
+            android:persistent="true"
+            android:title="@string/pref_title_live_drop_ms"
+            app:useSimpleSummaryProvider="true" />
+        <ListPreference
+            android:defaultValue="300"
+            android:entries="@array/pref_entries_latency_target_ms"
+            android:entryValues="@array/pref_entry_values_latency_target_ms"
+            android:key="@string/pref_key_latency_target_ms"
+            android:persistent="true"
+            android:title="@string/pref_title_latency_target_ms"
+            app:useSimpleSummaryProvider="true" />
+        <EditTextPreference
+            android:defaultValue="@string/pref_default_ntp_server"
+            android:key="@string/pref_key_ntp_server"
+            android:persistent="true"
+            android:title="@string/pref_title_ntp_server"
+            app:useSimpleSummaryProvider="true" />
+    </PreferenceCategory>
     <PreferenceCategory android:title="@string/pref_title_render_view">
         <CheckBoxPreference
             android:defaultValue="false"

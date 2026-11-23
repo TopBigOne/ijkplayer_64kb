@@ -102,6 +102,51 @@ public class Settings {
         return mSharedPreferences.getBoolean(key, false);
     }
 
+    /** 直播低延迟模式：关闭启动缓冲、不限制缓冲上限、nobuffer、缩短探测 */
+    public boolean getLiveLowLatency() {
+        String key = mAppContext.getString(R.string.pref_key_live_low_latency);
+        return mSharedPreferences.getBoolean(key, false);
+    }
+
+    /** 以视频为主时钟：画面不等音频输出缓冲，音频跟着视频调整 */
+    public boolean getLiveVideoMaster() {
+        String key = mAppContext.getString(R.string.pref_key_live_video_master);
+        return mSharedPreferences.getBoolean(key, false);
+    }
+
+    /** 追帧：缓冲超过 500ms 时 1.2 倍速播放，降到 200ms 以下恢复 */
+    public boolean getLiveChase() {
+        String key = mAppContext.getString(R.string.pref_key_live_chase);
+        return mSharedPreferences.getBoolean(key, false);
+    }
+
+    /** 缓冲超过该值（毫秒）时丢掉缓冲直接跳到下一个关键帧，0 表示关闭 */
+    public int getLiveDropMs() {
+        return getIntString(R.string.pref_key_live_drop_ms, 0);
+    }
+
+    /** HUD 延迟超过该值（毫秒）时标红 */
+    public int getLatencyTargetMs() {
+        return getIntString(R.string.pref_key_latency_target_ms, 300);
+    }
+
+    /** 端到端延迟校时用的 NTP 服务器，空表示不校时 */
+    public String getNtpServer() {
+        String key = mAppContext.getString(R.string.pref_key_ntp_server);
+        return mSharedPreferences.getString(key, mAppContext.getString(R.string.pref_default_ntp_server)).trim();
+    }
+
+    private int getIntString(int keyId, int defaultValue) {
+        String value = mSharedPreferences.getString(mAppContext.getString(keyId), null);
+        if (value == null)
+            return defaultValue;
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (NumberFormatException e) {
+            return defaultValue;
+        }
+    }
+
     public String getLastDirectory() {
         String key = mAppContext.getString(R.string.pref_key_last_directory);
         return mSharedPreferences.getString(key, "/");

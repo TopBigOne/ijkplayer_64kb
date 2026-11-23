@@ -27,5 +27,6 @@
     <color name="hud_bg">#EBF3D9C6</color>
     <color name="hud_text_name">#8A5A44</color>
     <color name="hud_text_value">#3B2A20</color>
+    <color name="hud_text_warn">#D32F2F</color>
 
 </resources>

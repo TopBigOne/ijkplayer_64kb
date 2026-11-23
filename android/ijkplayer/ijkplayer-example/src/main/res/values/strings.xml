@@ -19,6 +19,17 @@
     <string name="vdec_avcodec">avcodec</string>
     <string name="vdec_mediacodec">MediaCodec</string>
     <string name="fps">fps</string>
+    <string name="e2e_latency">e2e latency</string>
+    <string name="e2e_latency_no_sei">- (no timestamp SEI)</string>
+    <string name="recv_latency">  network / player</string>
+    <string name="recv_latency_fmt">%1$d ms / %2$d ms</string>
+    <string name="buffer_latency">buffer latency</string>
+    <string name="live_chase_state">catch-up</string>
+    <string name="live_chasing">speeding up</string>
+    <string name="live_not_chasing">normal</string>
+    <string name="live_drop_count_fmt">, jumped %d times</string>
+    <string name="clock_offset">clock offset</string>
+    <string name="clock_offset_none">not synced</string>
     <string name="v_cache">v-cache</string>
     <string name="a_cache">a-cache</string>
     <string name="load_cost">load-cost</string>
@@ -32,6 +43,7 @@
     <string name="mi_media">Media</string>
     <string name="mi_profile_level">Profile level</string>
     <string name="mi_pixel_format">Pixel format</string>
+    <string name="mi_dynamic_range">Dynamic range</string>
     <string name="mi_resolution">Resolution</string>
     <string name="mi_length">Length</string>
     <string name="mi_stream_fmt1">Stream #%d</string>

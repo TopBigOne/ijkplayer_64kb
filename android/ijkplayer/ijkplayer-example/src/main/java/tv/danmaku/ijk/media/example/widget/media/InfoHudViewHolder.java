@@ -16,6 +16,8 @@ import tv.danmaku.ijk.media.player.IMediaPlayer;
 import tv.danmaku.ijk.media.player.IjkMediaPlayer;
 import tv.danmaku.ijk.media.player.MediaPlayerProxy;
 import tv.danmaku.ijk.media.example.R;
+import tv.danmaku.ijk.media.example.application.NtpClock;
+import tv.danmaku.ijk.media.example.application.Settings;
 
 public class InfoHudViewHolder {
     private final Context mContext;
@@ -24,6 +26,7 @@ public class InfoHudViewHolder {
     private IMediaPlayer mMediaPlayer;
     private long mLoadCost = 0;
     private long mSeekCost = 0;
+    private int mLatencyTargetMs = 300;
 
     public InfoHudViewHolder(Context context, TableLayout tableLayout) {
         mContext = context;
@@ -61,8 +64,53 @@ public class InfoHudViewHolder {
             value.setTextColor(ContextCompat.getColor(mContext, R.color.hud_text_value));
     }
 
+    /** 设置值并按 warn 标红（延迟超过阈值） */
+    private void setRowValue(int id, String value, boolean warn) {
+        setRowValue(id, value);
+        TextView valueView = mRowMap.get(id).findViewById(R.id.value);
+        if (valueView != null)
+            valueView.setTextColor(ContextCompat.getColor(mContext, warn ? R.color.hud_text_warn : R.color.hud_text_value));
+    }
+
+    /** 直播延迟相关的几行，放在 HUD 最上面 */
+    private void updateLatencyRows(IjkMediaPlayer mp) {
+        // 端到端：推流端 SEI 时间戳 -> 本机送显
+        long e2e = mp.getE2eLatency();
+        if (e2e >= 0)
+            setRowValue(R.string.e2e_latency, String.format(Locale.US, "%d ms", e2e), e2e > mLatencyTargetMs);
+        else
+            setRowValue(R.string.e2e_latency, mContext.getString(R.string.e2e_latency_no_sei), false);
+
+        // 到达延迟：推流 -> 服务器 -> 网络，端到端减去它就是播放端耗时
+        long recv = mp.getE2eRecvLatency();
+        if (recv >= 0 && e2e >= 0)
+            setRowValue(R.string.recv_latency, mContext.getString(R.string.recv_latency_fmt, recv, e2e - recv), false);
+        else
+            setRowValue(R.string.recv_latency, "-", false);
+
+        // 播放端缓冲：包队列里音视频较大的那个
+        long buffered = Math.max(mp.getVideoCachedDuration(), mp.getAudioCachedDuration());
+        setRowValue(R.string.buffer_latency, formatedDurationMilli(buffered), buffered > mLatencyTargetMs);
+
+        String chase = mp.isLiveChasing()
+                ? mContext.getString(R.string.live_chasing)
+                : mContext.getString(R.string.live_not_chasing);
+        long drops = mp.getLiveDropCount();
+        if (drops > 0)
+            chase += mContext.getString(R.string.live_drop_count_fmt, drops);
+        setRowValue(R.string.live_chase_state, chase);
+
+        String server = NtpClock.getServer();
+        if (server != null)
+            setRowValue(R.string.clock_offset, String.format(Locale.US, "%+d ms (rtt %d ms)",
+                    NtpClock.getOffsetMs(), NtpClock.getRttMs()));
+        else
+            setRowValue(R.string.clock_offset, mContext.getString(R.string.clock_offset_none));
+    }
+
     public void setMediaPlayer(IMediaPlayer mp) {
         mMediaPlayer = mp;
+        mLatencyTargetMs = new Settings(mContext).getLatencyTargetMs();
         if (mMediaPlayer != null) {
             mHandler.sendEmptyMessageDelayed(MSG_UPDATE_HUD, 500);
         } else {
@@ -135,6 +183,8 @@ public class InfoHudViewHolder {
                     }
                     if (mp == null)
                         break;
+
+                    updateLatencyRows(mp);
 
                     int vdec = mp.getVideoDecoder();
                     switch (vdec) {

@@ -18,6 +18,16 @@
     <string name="vdec_avcodec">软解（FFmpeg avcodec）</string>
     <string name="vdec_mediacodec">硬解（MediaCodec）</string>
     <string name="fps">帧率（解码/输出）</string>
+    <string name="e2e_latency">端到端延迟</string>
+    <string name="e2e_latency_no_sei">-（流里没有时间戳 SEI）</string>
+    <string name="recv_latency">  其中 网络段 / 播放端</string>
+    <string name="buffer_latency">播放端缓冲延迟</string>
+    <string name="live_chase_state">追帧</string>
+    <string name="live_chasing">加速中</string>
+    <string name="live_not_chasing">正常速度</string>
+    <string name="live_drop_count_fmt">，已跳关键帧 %d 次</string>
+    <string name="clock_offset">时钟校正</string>
+    <string name="clock_offset_none">未校时</string>
     <string name="v_cache">视频缓冲（时长/大小）</string>
     <string name="a_cache">音频缓冲（时长/大小）</string>
     <string name="load_cost">起播耗时</string>
@@ -31,6 +41,7 @@
     <string name="mi_media">媒体</string>
     <string name="mi_profile_level">Profile / Level</string>
     <string name="mi_pixel_format">像素格式</string>
+    <string name="mi_dynamic_range">动态范围</string>
     <string name="mi_resolution">分辨率</string>
     <string name="mi_length">时长</string>
     <string name="mi_stream_fmt1">流 #%d</string>

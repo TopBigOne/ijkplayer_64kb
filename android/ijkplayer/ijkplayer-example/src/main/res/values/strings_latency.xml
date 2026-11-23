@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 设置页「直播延迟」分组 -->
+<resources>
+    <string name="pref_title_live_latency">Live latency</string>
+
+    <string name="pref_key_live_low_latency" translatable="false">pref.live_low_latency</string>
+    <string name="pref_title_live_low_latency">Low latency mode</string>
+    <string name="pref_summary_live_low_latency">No start-up buffering, unlimited buffer, nobuffer, short probe. For live streams only</string>
+
+    <string name="pref_key_live_video_master" translatable="false">pref.live_video_master</string>
+    <string name="pref_title_live_video_master">Video as master clock</string>
+    <string name="pref_summary_live_video_master">Show frames without waiting for the audio output buffer; audio follows video</string>
+
+    <string name="pref_key_live_chase" translatable="false">pref.live_chase</string>
+    <string name="pref_title_live_chase">Catch up</string>
+    <string name="pref_summary_live_chase">Play at 1.2x when buffered &gt; 500 ms, back to 1x below 200 ms</string>
+
+    <string name="pref_key_live_drop_ms" translatable="false">pref.live_drop_ms</string>
+    <string name="pref_title_live_drop_ms">Jump to key frame when buffered exceeds</string>
+    <string-array name="pref_entries_live_drop_ms">
+        <item>Off</item>
+        <item>1 s</item>
+        <item>2 s</item>
+        <item>3 s</item>
+        <item>5 s</item>
+    </string-array>
+    <string-array name="pref_entry_values_live_drop_ms" translatable="false">
+        <item>0</item>
+        <item>1000</item>
+        <item>2000</item>
+        <item>3000</item>
+        <item>5000</item>
+    </string-array>
+
+    <string name="pref_key_latency_target_ms" translatable="false">pref.latency_target_ms</string>
+    <string name="pref_title_latency_target_ms">HUD latency warning threshold</string>
+    <string-array name="pref_entries_latency_target_ms">
+        <item>200 ms</item>
+        <item>300 ms</item>
+        <item>500 ms</item>
+        <item>1 s</item>
+    </string-array>
+    <string-array name="pref_entry_values_latency_target_ms" translatable="false">
+        <item>200</item>
+        <item>300</item>
+        <item>500</item>
+        <item>1000</item>
+    </string-array>
+
+    <string name="pref_key_ntp_server" translatable="false">pref.ntp_server</string>
+    <string name="pref_title_ntp_server">NTP server (for end-to-end latency, empty = off)</string>
+    <string name="pref_default_ntp_server" translatable="false">ntp.aliyun.com</string>
+</resources>

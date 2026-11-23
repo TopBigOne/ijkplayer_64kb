@@ -58,6 +58,7 @@ import tv.danmaku.ijk.media.player.misc.IMediaFormat;
 import tv.danmaku.ijk.media.player.misc.ITrackInfo;
 import tv.danmaku.ijk.media.player.misc.IjkMediaFormat;
 import tv.danmaku.ijk.media.example.R;
+import tv.danmaku.ijk.media.example.application.NtpClock;
 import tv.danmaku.ijk.media.example.application.Settings;
 import tv.danmaku.ijk.media.example.services.MediaPlayerService;
 
@@ -1021,6 +1022,49 @@ public class IjkVideoView extends FrameLayout implements MediaController.MediaPl
         return text;
     }
 
+    /** 直播低延迟相关选项，以及端到端延迟测量用的 NTP 校时 */
+    private void applyLiveLatencyOptions(final IjkMediaPlayer ijkMediaPlayer) {
+        if (mSettings.getLiveLowLatency()) {
+            // 不等缓冲到水位线再播，读到就播
+            ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "packet-buffering", 0);
+            // 不限制包队列上限：读线程不会因为队列满而停读，积压交给追帧处理
+            ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "infbuf", 1);
+            // 解封装不做内部缓冲，探测数据量和时长缩短（只影响首帧，不影响稳定后的延迟）
+            ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "fflags", "nobuffer");
+            ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize", 64 * 1024);
+            ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzeduration", 500 * 1000);
+            // 软解：FFmpeg 默认帧级多线程，N 个线程会让输出晚 N-1 帧（6fps、8 线程就是 1 秒多），
+            // 只保留 slice 级多线程。硬解（MediaCodec）不受这个选项影响。
+            ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_CODEC, "thread_type", "slice");
+        }
+        if (mSettings.getLiveVideoMaster())
+            ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "av-sync-type", 1);   // AV_SYNC_VIDEO_MASTER
+        if (mSettings.getLiveChase()) {
+            ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "live-chase", 1);
+            ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "live-chase-start-ms", 500);
+            ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "live-chase-stop-ms", 200);
+            ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "live-chase-rate", 120);
+            // 变速走 SoundTouch：OpenSL ES 输出不支持变速，AudioTrack 变速会变调
+            ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "soundtouch", 1);
+        }
+        int dropMs = mSettings.getLiveDropMs();
+        if (dropMs > 0)
+            ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "live-drop-ms", dropMs);
+
+        String ntpServer = mSettings.getNtpServer();
+        if (!TextUtils.isEmpty(ntpServer)) {
+            if (NtpClock.hasOffset(ntpServer))
+                ijkMediaPlayer.setE2eClockOffset(NtpClock.getOffsetMs());
+            NtpClock.request(ntpServer, new NtpClock.Callback() {
+                @Override
+                public void onOffset(long offsetMs, long rttMs) {
+                    // 播放器已释放时 native 层只打日志，不会抛异常
+                    ijkMediaPlayer.setE2eClockOffset(offsetMs);
+                }
+            });
+        }
+    }
+
     public IMediaPlayer createPlayer(int playerType) {
         IMediaPlayer mediaPlayer = null;
 
@@ -1081,6 +1125,8 @@ public class IjkVideoView extends FrameLayout implements MediaController.MediaPl
                     ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "http-detect-range-support", 0);
 
                     ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_CODEC, "skip_loop_filter", 48);
+
+                    applyLiveLatencyOptions(ijkMediaPlayer);
                 }
                 mediaPlayer = ijkMediaPlayer;
             }
@@ -1167,6 +1213,7 @@ public class IjkVideoView extends FrameLayout implements MediaController.MediaPl
                             builder.appendRow2(R.string.mi_codec, mediaFormat.getString(IjkMediaFormat.KEY_IJK_CODEC_LONG_NAME_UI));
                             builder.appendRow2(R.string.mi_profile_level, mediaFormat.getString(IjkMediaFormat.KEY_IJK_CODEC_PROFILE_LEVEL_UI));
                             builder.appendRow2(R.string.mi_pixel_format, mediaFormat.getString(IjkMediaFormat.KEY_IJK_CODEC_PIXEL_FORMAT_UI));
+                            builder.appendRow2(R.string.mi_dynamic_range, mediaFormat.getString(IjkMediaFormat.KEY_IJK_HDR_UI));
                             builder.appendRow2(R.string.mi_resolution, mediaFormat.getString(IjkMediaFormat.KEY_IJK_RESOLUTION_UI));
                             builder.appendRow2(R.string.mi_frame_rate, mediaFormat.getString(IjkMediaFormat.KEY_IJK_FRAME_RATE_UI));
                             builder.appendRow2(R.string.mi_bit_rate, mediaFormat.getString(IjkMediaFormat.KEY_IJK_BIT_RATE_UI));
