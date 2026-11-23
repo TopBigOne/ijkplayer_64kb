@@ -3,10 +3,10 @@
 基于 bilibili ijkplayer 的 Android 工程，用 CMake + NDK 编译 native 播放器，产出 AAR，附带示例 App。
 各 module 的作用见 [当前module是干嘛的.md](当前module是干嘛的.md)。
 
-| module | 说明 |
-|---|---|
-| `ijkplayer-cmake` | 播放器库，编译 `ijkmedia/` 下的 C 代码，产出 `ijkplayer-cmake-release.aar` |
-| `ijkplayer-example` | 示例 App（包名 `tv.danmaku.ijk.media.example`），可以选本地文件或输入 URL 播放 |
+| module              | 说明                                                           |
+|---------------------|--------------------------------------------------------------|
+| `ijkplayer-cmake`   | 播放器库，编译 `ijkmedia/` 下的 C 代码，产出 `ijkplayer-cmake-release.aar` |
+| `ijkplayer-example` | 示例 App（包名 `tv.danmaku.ijk.media.example`），可以选本地文件或输入 URL 播放  |
 
 ## 新增功能
 
