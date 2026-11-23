@@ -1,6 +1,8 @@
 #!/bin/bash
 # 本地 WS-FLV 直播环境：SRS(RTMP 收流 + HTTP-FLV) + ffmpeg 推流 + WebSocket 转发。
-#   tools/ws-flv-live.sh start [--camera] [--file PATH]
+#   tools/ws-flv-live.sh start [--camera] [--file PATH] [--sei]
+#     --sei：给每个视频帧插入推流端时间戳 SEI（tools/latency/flv_sei_inject.py），
+#            播放端 HUD 显示端到端延迟。NTP 服务器用 NTP_SERVER 覆盖，默认 ntp.aliyun.com。
 #   tools/ws-flv-live.sh stop
 #   tools/ws-flv-live.sh status
 # SRS 目录可用 SRS_HOME 覆盖。日志和 pid 文件在 tests/ijkws/build/live/。
@@ -18,6 +20,8 @@ HTTP_PORT=8080
 WS_PORT=18780
 WSS_PORT=18781
 NAMES=(srs ffmpeg relay)
+SEI_INJECT="$ROOT/tools/latency/flv_sei_inject.py"
+NTP_SERVER="${NTP_SERVER-ntp.aliyun.com}"
 
 pidfile() { echo "$LIVE/$1.pid"; }
 
@@ -27,7 +31,7 @@ pid_is_ours() {  # name pid
     args="$(ps -o args= -p "$2" 2>/dev/null)" || return 1
     case "$1" in
         srs)    [[ -n "$SRS_BIN" && "$args" == "$SRS_BIN"* ]] ;;
-        ffmpeg) [[ "$args" == "$FF "* && "$args" == *"rtmp://127.0.0.1:$RTMP_PORT/live/test"* ]] ;;
+        ffmpeg) [[ ( "$args" == "$FF "* || "$args" == *"$SEI_INJECT"* ) && "$args" == *"rtmp://127.0.0.1:$RTMP_PORT/live/test"* ]] ;;
         relay)  [[ "$args" == *"$HERE/ws_test_server.py"* ]] ;;
     esac
 }
@@ -86,12 +90,13 @@ wait_port() {  # port seconds
 }
 
 cmd_start() {
-    local mode=pattern file="" busy=0 p
+    local mode=pattern file="" busy=0 p sei=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --camera) mode=camera ;;
             --file) mode=file; file="${2:-}"; shift
                     [ -f "$file" ] || { echo "--file: no such file: $file" >&2; return 1; } ;;
+            --sei) sei=1 ;;
             *) echo "unknown option: $1" >&2; return 1 ;;
         esac
         shift
@@ -125,24 +130,34 @@ cmd_start() {
 
     # 2. ffmpeg 推流
     local url="rtmp://127.0.0.1:$RTMP_PORT/live/test"
-    # 注：本机 ffmpeg 4.4 只有 h264_videotoolbox，它会忽略 -bf 0 仍输出 B 帧，
-    # ffmpeg.log 里会持续出现 "Invalid DTS ... replacing by guess"（muxer 已修正，不影响播放）。
-    local enc=(-c:v h264_videotoolbox -b:v 1M -g 50 -c:a aac -f flv "$url")
+    # 注：ffmpeg 4.4 的 h264_videotoolbox 会忽略 -bf 0 仍输出 B 帧（ffmpeg.log 里持续出现
+    # "Invalid DTS ... replacing by guess"，muxer 已修正，不影响播放）；FFmpeg 6.0 起 -bf 0 生效。
+    # 测低延迟时用 6.0：FFMPEG=/Users/dev/Documents/AV/FFmpeg-6.0/install_macos
+    # ffargs 只含输入和编码参数，输出（-f flv url）在最后统一加
+    local enc=(-c:v h264_videotoolbox -b:v 1M -bf 0 -g 25 -c:a aac)
     local ffargs
     case "$mode" in
         pattern) ffargs=(-re -f lavfi -i testsrc=size=640x360:rate=25 -f lavfi -i sine "${enc[@]}") ;;
         camera)  ffargs=(-f avfoundation -framerate 30 -i "0:0" "${enc[@]}") ;;
         file)
             # 源文件已是 H.264/AAC 时直接 copy：不重编码，推出去的就是原始码流
-            local vc ac cv=(-c:v h264_videotoolbox -b:v 1M -g 50) ca=(-c:a aac)
+            local vc ac cv=(-c:v h264_videotoolbox -b:v 1M -bf 0 -g 25) ca=(-c:a aac)
             vc="$("$FFMPEG/bin/ffprobe" -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$file" 2>/dev/null)"
             ac="$("$FFMPEG/bin/ffprobe" -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$file" 2>/dev/null)"
             [ "$vc" = h264 ] && cv=(-c:v copy)
             [ "$ac" = aac ] && ca=(-c:a copy)
             echo "file source: video=${vc:-none} (${cv[*]}), audio=${ac:-none} (${ca[*]})"
-            ffargs=(-stream_loop -1 -re -i "$file" "${cv[@]}" "${ca[@]}" -f flv "$url") ;;
+            ffargs=(-stream_loop -1 -re -i "$file" "${cv[@]}" "${ca[@]}") ;;
     esac
-    "$FF" -nostdin -loglevel warning "${ffargs[@]}" >"$LIVE/ffmpeg.log" 2>&1 &
+    if [ $sei -eq 1 ]; then
+        # 编码输出 FLV 到管道 -> 插 SEI -> ffmpeg -c copy 推 RTMP；stop 时杀 python，它会带走两个 ffmpeg
+        echo "SEI timestamp injection: on (NTP: ${NTP_SERVER:-off})"
+        # 回放文件时按 pts 记时间戳（--cts），见 flv_sei_inject.py 说明
+        local cts=(); [ "$mode" = file ] && cts=(--cts)
+        python3 "$SEI_INJECT" --ffmpeg "$FF" --ntp "$NTP_SERVER" ${cts[@]+"${cts[@]}"} --out "$url" -- "${ffargs[@]}" >"$LIVE/ffmpeg.log" 2>&1 &
+    else
+        "$FF" -nostdin -loglevel warning "${ffargs[@]}" -f flv "$url" >"$LIVE/ffmpeg.log" 2>&1 &
+    fi
     echo $! >"$(pidfile ffmpeg)"
 
     # 3. WebSocket 转发
@@ -182,5 +197,5 @@ case "${1:-}" in
     start)  shift; cmd_start "$@" ;;
     stop)   cmd_stop ;;
     status) cmd_status ;;
-    *) echo "usage: $0 start [--camera] [--file PATH] | stop | status" >&2; exit 2 ;;
+    *) echo "usage: $0 start [--camera] [--file PATH] [--sei] | stop | status" >&2; exit 2 ;;
 esac

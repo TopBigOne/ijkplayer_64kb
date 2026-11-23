@@ -5,7 +5,9 @@
 # 推流的实际实现在仓库根目录 tools/ws-flv-live.sh，本脚本只补充局域网地址、连通性检查和手机起播。
 #
 # 用法：
-#   tools/ws-live.sh start [--camera | --file PATH]   启动推流（默认测试图+正弦音）
+#   tools/ws-live.sh start [--camera | --file PATH] [--sei]
+#                                                     启动推流（默认测试图+正弦音）；
+#                                                     --sei 插入推流端时间戳，HUD 显示端到端延迟
 #   tools/ws-live.sh stop | status                    停止 / 查看状态
 #   tools/ws-live.sh url                              打印手机可用的拉流地址
 #   tools/ws-live.sh check                            在 Mac 上用局域网 IP 做 ws/wss 握手检查
@@ -15,6 +17,7 @@
 #   WS_LIVE_IP   手动指定 Mac 的局域网 IP（默认取默认路由网卡的 IPv4）
 #   SRS_HOME     SRS 源码目录（默认 /Users/dev/Documents/AV/srs/trunk，见根目录脚本）
 #   FFMPEG       ffmpeg 安装前缀（默认 /usr/local/ffmpeg/4.4）
+#   NTP_SERVER   --sei 时推流端校时用的 NTP 服务器（默认 ntp.aliyun.com，要和 App 设置里一致；设为空表示不校时）
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
