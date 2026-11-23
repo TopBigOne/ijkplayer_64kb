@@ -27,23 +27,46 @@ import android.view.MenuItem;
 
 import tv.danmaku.ijk.media.example.R;
 import tv.danmaku.ijk.media.example.application.AppActivity;
+import tv.danmaku.ijk.media.example.content.SampleMediaCatalog;
+import tv.danmaku.ijk.media.example.fragments.SampleCategoryListFragment;
 import tv.danmaku.ijk.media.example.fragments.SampleMediaListFragment;
 
+/** 不带分类参数时显示分类目录，带分类参数时显示该分类的测试链接。 */
 public class SampleMediaActivity extends AppActivity  {
+    private static final String EXTRA_CATEGORY = "category";
+
     public static Intent newIntent(Context context) {
-        Intent intent = new Intent(context, SampleMediaActivity.class);
-        return intent;
+        return new Intent(context, SampleMediaActivity.class);
     }
 
+    /** 回到 Sample 首页：已在栈中时直接回退到它，不重复创建。 */
     public static void intentTo(Context context) {
-        context.startActivity(newIntent(context));
+        Intent intent = newIntent(context);
+        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        context.startActivity(intent);
+    }
+
+    public static void intentTo(Context context, int categoryIndex) {
+        Intent intent = newIntent(context);
+        intent.putExtra(EXTRA_CATEGORY, categoryIndex);
+        context.startActivity(intent);
     }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        Fragment newFragment = SampleMediaListFragment.newInstance();
+        int categoryIndex = getIntent().getIntExtra(EXTRA_CATEGORY, -1);
+        SampleMediaCatalog.Category category = SampleMediaCatalog.category(categoryIndex);
+        if (category != null)
+            setTitle(category.title);
+
+        if (savedInstanceState != null)
+            return;  // 旋转等重建时 FragmentManager 会自动恢复
+
+        Fragment newFragment = category != null
+                ? SampleMediaListFragment.newInstance(categoryIndex)
+                : SampleCategoryListFragment.newInstance();
         FragmentTransaction transaction = getSupportFragmentManager().beginTransaction();
 
         transaction.replace(R.id.body, newFragment);
@@ -56,7 +79,7 @@ public class SampleMediaActivity extends AppActivity  {
         if (!show)
             return show;
 
-        MenuItem item = menu.findItem(R.id.action_recent);
+        MenuItem item = menu.findItem(R.id.action_sample);
         if (item != null)
             item.setVisible(false);
 
