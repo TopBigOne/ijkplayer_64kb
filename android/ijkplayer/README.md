@@ -68,6 +68,18 @@ tools/ws-live.sh stop
 - Mac 的 IP 取错了（比如同时连了有线和 Wi-Fi）：用 `WS_LIVE_IP=x.x.x.x tools/ws-live.sh url` 指定。
 - 示例 App「Sample → WebSocket 拉流」里的 adb reverse 条目指向 `127.0.0.1`，只有 USB 连接并执行了 `adb reverse tcp:18780 tcp:18780`（wss 还需 `tcp:18781`）时才能播；走局域网时点「输入自定义地址」，填 `url` 命令打印的地址（会记住上次输入）。
 
+### 3. 直播延迟：端到端测量、HUD 显示与追帧
+
+- **端到端延迟**：推流端给每个视频帧插一个带 NTP 时间的 SEI，播放器在帧送显时计算「当前时刻 - 推流端时刻」，HUD 实时显示，并拆分出网络段和播放端各占多少。推流加 `--sei`：
+
+  ```bash
+  SRS_CONF=$PWD/../../tools/latency/srs-low-latency.conf tools/ws-live.sh start --file a.mp4 --sei
+  ```
+
+- **低延迟播放**：示例 App「设置 → 直播延迟」里有低延迟模式、以视频为主时钟、追帧（加速播放）、丢 GOP 跳关键帧、HUD 告警阈值、NTP 服务器。
+- **Java 接口**：`IjkMediaPlayer.getE2eLatency()` / `getE2eRecvLatency()` / `setE2eClockOffset()`；新增 player 选项 `live-chase*`、`live-drop-ms`、`av-sync-type`。
+- 原理、SEI 格式、实测数据和调优建议见仓库根目录 `doc/live-latency.md`。
+
 **其他测试工具**（在仓库根目录执行）
 
 - `tools/ws-flv-live.sh`：推流环境的实际实现，`ws-live.sh` 只是在它之上加了一层封装。
