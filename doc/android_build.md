@@ -42,17 +42,15 @@ chmod +x install-ffmpeg.sh build-aar.sh   # 首次执行需要加权限
 ./install-ffmpeg.sh
 ```
 
-该脚本实际调用：
+脚本默认分三步：
 
-```bash
-../FFToolChain/main.sh install -l 'soundtouch yuv ijkffmpeg' -p android
-```
+1. `main.sh install -l 'soundtouch yuv ijkffmpeg'`：从 [MRFFToolChainBuildShell Releases](https://github.com/debugly/MRFFToolChainBuildShell/releases) 下载上游预编译包。soundtouch、libyuv 直接使用；openssl 只打包在 ijkffmpeg 的 zip 里，借此装上（上游没有单独的 Android openssl 包）
+2. `main.sh init -l ijkffmpeg`：拉取 bilibili FFmpeg 源码（`ff4.0--ijk0.8.8--20210426--001`，FFmpeg 4.0）
+3. `main.sh compile -l ijkffmpeg -c rebuild`：按自有 fork 的 `module-lite.sh` 配置源码编译 arm64 / armv7a，覆盖第 1 步下载的 ijkffmpeg（启用 rtmps 等定制）
 
-**注意**：这一步是从 [MRFFToolChainBuildShell Releases](https://github.com/debugly/MRFFToolChainBuildShell/releases) **下载已编译好的静态库**（`soundtouch`、`libyuv`、`ijkffmpeg`），覆盖 arm64-v8a / armeabi-v7a / x86 / x86_64 四个 ABI，并不在本地从源码编译 ffmpeg，因此：
+因此需要：能访问 GitHub、设置 `ANDROID_NDK_HOME`、`brew install nasm pkg-config`。缺少时脚本直接报错退出，不会自动安装。首次约 2~3 分钟（预编译 zip 缓存在 `FFToolChain/build/pre/`，之后不再重复下载）。
 
-- 不需要 nasm / pkg-config 等 ffmpeg 编译工具
-- 依赖网络能访问 GitHub
-- 编译产物版本受 [FFToolChain/configs/libs/ijkffmpeg.sh](../FFToolChain/configs/libs/ijkffmpeg.sh) 中 `PRE_COMPILE_TAG_ANDROID` 锁定的 tag 控制，当前为 FFmpeg 4.0（bilibili fork，`ff4.0--ijk0.8.8--20210426--001`）
+只想快速拿到能编译的环境、不需要定制时，可以用 `./install-ffmpeg.sh --prebuilt`，全部用上游预编译包（**不含 rtmps 等定制**）。
 
 下载解压后的库位于 `FFToolChain/build/product/android/`，并同步进 `android/ijkplayer/ijkplayer-cmake/src/main/cpp/third-libs/`。
 
@@ -95,7 +93,9 @@ android/ijkplayer/ijkplayer-cmake/build/outputs/aar/
 - `configs/ijk-ffmpeg-config/module-lite.sh`：启用 `rtmps` 协议（RTMP over TLS）
 - `tools/export-android-host-env.sh`：依赖命令已在 PATH 时不再调用 `brew install`（新版 brew 的 pkg-config 由 pkgconf 提供，原检测会误判）
 
-**注意**：第 2 步 `install-ffmpeg.sh` 下载的是上游作者的预编译包，**不含上述改动**（例如不支持 `rtmps://`）。需要这些改动时，必须用源码编译覆盖。
+第 2 步的 `./install-ffmpeg.sh` 默认已经包含下面的源码编译流程。本节用于单独重编 ijkffmpeg（例如只改了 `module-lite.sh`），或排查编译问题。
+
+**注意**：`./install-ffmpeg.sh --prebuilt` 用的是上游作者的预编译包，**不含上述改动**（例如不支持 `rtmps://`）。
 
 ### 额外前置条件
 
@@ -103,7 +103,7 @@ android/ijkplayer/ijkplayer-cmake/build/outputs/aar/
 - `brew install nasm pkg-config`
 - 已执行过第 2 步（需要其中的 openssl、soundtouch、yuv 预编译库；ijkffmpeg 通过 pkg-config 自动发现 openssl）
 
-### 命令
+### 手动命令
 
 ```bash
 cd FFToolChain
@@ -119,7 +119,7 @@ cd FFToolChain
 
 - 只编 `armv7a arm64`，与 `ijkplayer-cmake` / `ijkplayer-example` 的 `abiFilters` 一致；`-a` 不支持 `all`
 - 产物直接覆盖 `FFToolChain/build/product/android/universal/ijkffmpeg/ijkffmpeg-{arm64,armv7a}/`，CMake 通过 `third-libs` 软链接读取，无需额外拷贝
-- **之后不要再跑 `install-ffmpeg.sh`**，否则会被上游预编译包覆盖回去
+- 之后不要再跑 `install-ffmpeg.sh --prebuilt`，否则 ijkffmpeg 会被上游预编译包覆盖回去（不带参数的 `install-ffmpeg.sh` 没问题）
 
 ### 验证
 
