@@ -40,6 +40,11 @@ dependencies {
     implementation 'com.android.support:preference-v7:28.0.0'
     implementation project(':ijkplayer-cmake')
 
+    // 字节 CodeLocator（配合 Android Studio 插件抓取界面/定位代码），仅 debug 包引入
+    debugImplementation "com.bytedance.tools.codelocator:codelocator-core:2.0.4"
+    // 注意：lancet 模块需配合 Lancet 编译插件才会织入代码；未接插件时只是引入类，不生效
+    debugImplementation "com.bytedance.tools.codelocator:codelocator-lancet-all:2.0.4"
+
 
 //    implementation project(':ijkplayer-armv5')
 //    implementation project(':ijkplayer-armv7a')
