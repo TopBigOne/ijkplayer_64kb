@@ -69,6 +69,8 @@ fi
 #    zip 会缓存在 FFToolChain/build/pre/，之后不再重复下载。
 echo "==> [1/3] 下载预编译包：soundtouch yuv ijkffmpeg（取其中的 openssl）"
 "$TOOLCHAIN" install -l 'soundtouch yuv ijkffmpeg' -p android
+# 只需要其中的 openssl；FFmpeg 4.0（ijkffmpeg）本身已不再使用，删掉避免混淆
+rm -rf "$THIS_DIR/../FFToolChain/build/product/android/universal/ijkffmpeg"
 
 # 2. 拉取官方 FFmpeg 源码并打 ijk 补丁（已存在时复用）
 echo "==> [2/3] 准备 FFmpeg 7 源码（官方 n7.1.3 + ijk 补丁）：$ARCHS"
