@@ -45,29 +45,4 @@ dependencies {
     debugImplementation "com.bytedance.tools.codelocator:codelocator-core:2.0.4"
     // 注意：lancet 模块需配合 Lancet 编译插件才会织入代码；未接插件时只是引入类，不生效
     debugImplementation "com.bytedance.tools.codelocator:codelocator-lancet-all:2.0.4"
-
-
-//    implementation project(':ijkplayer-armv5')
-//    implementation project(':ijkplayer-armv7a')
-//    implementation project(':ijkplayer-arm64')
-//    implementation project(':ijkplayer-x86')
-
-    // implementation 'tv.danmaku.ijk.media:ijkplayer-java:0.8.8'
-    // implementation 'tv.danmaku.ijk.media:ijkplayer-exo:0.8.8'
-
-    // all32Compile 'tv.danmaku.ijk.media:ijkplayer-armv5:0.8.9'
-    // all32Compile 'tv.danmaku.ijk.media:ijkplayer-armv7a:0.8.9'
-    // all32Compile 'tv.danmaku.ijk.media:ijkplayer-x86:0.8.9'
-
-    // all64Compile 'tv.danmaku.ijk.media:ijkplayer-armv5:0.8.9'
-    // all64Compile 'tv.danmaku.ijk.media:ijkplayer-armv7a:0.8.9'
-    // all64Compile 'tv.danmaku.ijk.media:ijkplayer-arm64:0.8.9'
-    // all64Compile 'tv.danmaku.ijk.media:ijkplayer-x86:0.8.9'
-    // all64Compile 'tv.danmaku.ijk.media:ijkplayer-x86_64:0.8.9'
-
-    // armv5Compile project(':player-armv5')
-    // armv7aCompile project(':player-armv7a')
-    // arm64Compile project(':player-arm64')
-    // x86Compile project(':player-x86')
-    // x86_64Compile project(':player-x86_64')
 }
