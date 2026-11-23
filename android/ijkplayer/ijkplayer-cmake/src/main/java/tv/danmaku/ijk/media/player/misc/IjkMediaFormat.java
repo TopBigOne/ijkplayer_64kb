@@ -38,6 +38,7 @@ public class IjkMediaFormat implements IMediaFormat {
     public static final String KEY_IJK_CODEC_PIXEL_FORMAT_UI = "ijk-pixel-format-ui";
     public static final String KEY_IJK_RESOLUTION_UI = "ijk-resolution-ui";
     public static final String KEY_IJK_FRAME_RATE_UI = "ijk-frame-rate-ui";
+    public static final String KEY_IJK_HDR_UI = "ijk-hdr-ui";
 
     // Audio
     public static final String KEY_IJK_SAMPLE_RATE_UI = "ijk-sample-rate-ui";
@@ -215,6 +216,13 @@ public class IjkMediaFormat implements IMediaFormat {
                 }
             }
         });
+        sFormatterMap.put(KEY_IJK_HDR_UI, new Formatter() {
+            @Override
+            protected String doFormat(IjkMediaFormat mediaFormat) {
+                return mediaFormat.mMediaFormat.getHdrInline();
+            }
+        });
+
         sFormatterMap.put(KEY_IJK_FRAME_RATE_UI, new Formatter() {
             @Override
             protected String doFormat(IjkMediaFormat mediaFormat) {

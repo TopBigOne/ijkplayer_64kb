@@ -709,6 +709,16 @@ IjkMediaPlayer_getMediaMeta(JNIEnv *env, jobject thiz)
                     fillMetaInternal(env, jstream_bundle, streamRawMeta, IJKM_KEY_TBR_DEN, NULL );
                     fillMetaInternal(env, jstream_bundle, streamRawMeta, IJKM_KEY_SAR_NUM, NULL );
                     fillMetaInternal(env, jstream_bundle, streamRawMeta, IJKM_KEY_SAR_DEN, NULL );
+                    fillMetaInternal(env, jstream_bundle, streamRawMeta, IJKM_KEY_BIT_DEPTH, NULL );
+                    fillMetaInternal(env, jstream_bundle, streamRawMeta, IJKM_KEY_COLOR_RANGE, NULL );
+                    fillMetaInternal(env, jstream_bundle, streamRawMeta, IJKM_KEY_COLOR_PRIMARIES, NULL );
+                    fillMetaInternal(env, jstream_bundle, streamRawMeta, IJKM_KEY_COLOR_TRC, NULL );
+                    fillMetaInternal(env, jstream_bundle, streamRawMeta, IJKM_KEY_COLOR_SPACE, NULL );
+                    fillMetaInternal(env, jstream_bundle, streamRawMeta, IJKM_KEY_HDR_TYPE, NULL );
+                    fillMetaInternal(env, jstream_bundle, streamRawMeta, IJKM_KEY_MAX_CLL, NULL );
+                    fillMetaInternal(env, jstream_bundle, streamRawMeta, IJKM_KEY_MAX_FALL, NULL );
+                    fillMetaInternal(env, jstream_bundle, streamRawMeta, IJKM_KEY_MASTERING_MAX_LUM, NULL );
+                    fillMetaInternal(env, jstream_bundle, streamRawMeta, IJKM_KEY_MASTERING_MIN_LUM, NULL );
                 } else if (0 == strcmp(type, IJKM_VAL_TYPE__AUDIO)) {
                     fillMetaInternal(env, jstream_bundle, streamRawMeta, IJKM_KEY_SAMPLE_RATE, NULL );
                     fillMetaInternal(env, jstream_bundle, streamRawMeta, IJKM_KEY_CHANNEL_LAYOUT, NULL );

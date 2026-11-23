@@ -24,6 +24,8 @@
 #include "ijkmeta.h"
 #include "ff_ffinc.h"
 #include "ijksdl/ijksdl_misc.h"
+#include "libavutil/pixdesc.h"
+#include "libavutil/mastering_display_metadata.h"
 
 #define IJK_META_INIT_CAPACITY 13
 
@@ -174,6 +176,110 @@ static int64_t get_bit_rate(AVCodecParameters *codecpar)
     return bit_rate;
 }
 
+static int get_video_bit_depth(AVCodecParameters *codecpar)
+{
+    if (codecpar->format != AV_PIX_FMT_NONE) {
+        const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(codecpar->format);
+        if (desc && desc->nb_components > 0)
+            return desc->comp[0].depth;
+    }
+    if (codecpar->bits_per_raw_sample > 0)
+        return codecpar->bits_per_raw_sample;
+    if (codecpar->codec_id == AV_CODEC_ID_HEVC && codecpar->profile == FF_PROFILE_HEVC_MAIN_10)
+        return 10;
+    if (codecpar->codec_id == AV_CODEC_ID_H264 && codecpar->profile == FF_PROFILE_H264_HIGH_10)
+        return 10;
+    return 0;
+}
+
+/*
+ * 判定规则：
+ *   - transfer = PQ(SMPTE2084)  -> hdr10
+ *   - transfer = HLG(ARIB-B67)  -> hlg
+ *   - transfer 明确为其它值     -> sdr
+ *   - transfer 未知：位深 >= 10 或色域 BT.2020 -> unknown（疑似 HDR，需要关注）
+ *                    位深已知为 8 / 色域明确非 2020 -> sdr
+ *                    什么都不知道 -> unknown
+ */
+static const char *get_hdr_type(AVCodecParameters *codecpar, int bit_depth)
+{
+    switch (codecpar->color_trc) {
+        case AVCOL_TRC_SMPTE2084:
+            return IJKM_VAL_HDR_TYPE__HDR10;
+        case AVCOL_TRC_ARIB_STD_B67:
+            return IJKM_VAL_HDR_TYPE__HLG;
+        case AVCOL_TRC_UNSPECIFIED:
+        case AVCOL_TRC_RESERVED0:
+        case AVCOL_TRC_RESERVED:
+            break;
+        default:
+            return IJKM_VAL_HDR_TYPE__SDR;
+    }
+
+    if (bit_depth >= 10 || codecpar->color_primaries == AVCOL_PRI_BT2020)
+        return IJKM_VAL_HDR_TYPE__UNKNOWN;
+    if (bit_depth == 8 ||
+        (codecpar->color_primaries != AVCOL_PRI_UNSPECIFIED && codecpar->color_primaries != AVCOL_PRI_RESERVED0 && codecpar->color_primaries != AVCOL_PRI_RESERVED))
+        return IJKM_VAL_HDR_TYPE__SDR;
+    return IJKM_VAL_HDR_TYPE__UNKNOWN;
+}
+
+static void set_string_if_valid(IjkMediaMeta *meta, const char *key, const char *value)
+{
+    if (value && value[0])
+        ijkmeta_set_string_l(meta, key, value);
+}
+
+static void fill_video_color_meta(IjkMediaMeta *stream_meta, AVStream *st)
+{
+    AVCodecParameters *codecpar = st->codecpar;
+    char buf[32];
+
+    int bit_depth = get_video_bit_depth(codecpar);
+    if (bit_depth > 0)
+        ijkmeta_set_int64_l(stream_meta, IJKM_KEY_BIT_DEPTH, bit_depth);
+
+    if (codecpar->color_range != AVCOL_RANGE_UNSPECIFIED)
+        set_string_if_valid(stream_meta, IJKM_KEY_COLOR_RANGE, av_color_range_name(codecpar->color_range));
+    if (codecpar->color_primaries != AVCOL_PRI_UNSPECIFIED)
+        set_string_if_valid(stream_meta, IJKM_KEY_COLOR_PRIMARIES, av_color_primaries_name(codecpar->color_primaries));
+    if (codecpar->color_trc != AVCOL_TRC_UNSPECIFIED)
+        set_string_if_valid(stream_meta, IJKM_KEY_COLOR_TRC, av_color_transfer_name(codecpar->color_trc));
+    if (codecpar->color_space != AVCOL_SPC_UNSPECIFIED)
+        set_string_if_valid(stream_meta, IJKM_KEY_COLOR_SPACE, av_color_space_name(codecpar->color_space));
+
+    const char *hdr_type = get_hdr_type(codecpar, bit_depth);
+    ijkmeta_set_string_l(stream_meta, IJKM_KEY_HDR_TYPE, hdr_type);
+
+    /* 容器层（如 mp4 的 mdcv/clli）携带的 HDR 静态元数据；码流 SEI 里的只能在解码后从帧上拿，这里不处理 */
+    int size = 0;
+    const AVContentLightMetadata *cll = (const AVContentLightMetadata *)
+        av_stream_get_side_data(st, AV_PKT_DATA_CONTENT_LIGHT_LEVEL, &size);
+    if (cll && size >= (int)sizeof(*cll)) {
+        if (cll->MaxCLL > 0)
+            ijkmeta_set_int64_l(stream_meta, IJKM_KEY_MAX_CLL, cll->MaxCLL);
+        if (cll->MaxFALL > 0)
+            ijkmeta_set_int64_l(stream_meta, IJKM_KEY_MAX_FALL, cll->MaxFALL);
+    }
+
+    size = 0;
+    const AVMasteringDisplayMetadata *mdm = (const AVMasteringDisplayMetadata *)
+        av_stream_get_side_data(st, AV_PKT_DATA_MASTERING_DISPLAY_METADATA, &size);
+    if (mdm && size >= (int)sizeof(*mdm) && mdm->has_luminance) {
+        snprintf(buf, sizeof(buf), "%.4f", av_q2d(mdm->max_luminance));
+        ijkmeta_set_string_l(stream_meta, IJKM_KEY_MASTERING_MAX_LUM, buf);
+        snprintf(buf, sizeof(buf), "%.4f", av_q2d(mdm->min_luminance));
+        ijkmeta_set_string_l(stream_meta, IJKM_KEY_MASTERING_MIN_LUM, buf);
+    }
+
+    av_log(NULL, AV_LOG_INFO, "ijkmeta: video stream #%d hdr_type=%s bit_depth=%d trc=%s primaries=%s space=%s range=%s\n",
+           st->index, hdr_type, bit_depth,
+           av_color_transfer_name(codecpar->color_trc) ? av_color_transfer_name(codecpar->color_trc) : "?",
+           av_color_primaries_name(codecpar->color_primaries) ? av_color_primaries_name(codecpar->color_primaries) : "?",
+           av_color_space_name(codecpar->color_space) ? av_color_space_name(codecpar->color_space) : "?",
+           av_color_range_name(codecpar->color_range) ? av_color_range_name(codecpar->color_range) : "?");
+}
+
 void ijkmeta_set_avformat_context_l(IjkMediaMeta *meta, AVFormatContext *ic)
 {
     if (!meta || !ic)
@@ -249,6 +355,8 @@ void ijkmeta_set_avformat_context_l(IjkMediaMeta *meta, AVFormatContext *ic)
                     ijkmeta_set_int64_l(stream_meta, IJKM_KEY_TBR_NUM, st->avg_frame_rate.num);
                     ijkmeta_set_int64_l(stream_meta, IJKM_KEY_TBR_DEN, st->avg_frame_rate.den);
                 }
+
+                fill_video_color_meta(stream_meta, st);
                 break;
             }
             case AVMEDIA_TYPE_AUDIO: {

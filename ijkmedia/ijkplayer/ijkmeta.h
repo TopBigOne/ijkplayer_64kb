@@ -60,6 +60,21 @@
 #define IJKM_KEY_TBR_DEN        "tbr_den"
 #define IJKM_KEY_SAR_NUM        "sar_num"
 #define IJKM_KEY_SAR_DEN        "sar_den"
+// stream: video color / HDR
+#define IJKM_KEY_BIT_DEPTH          "bit_depth"
+#define IJKM_KEY_COLOR_RANGE        "color_range"
+#define IJKM_KEY_COLOR_PRIMARIES    "color_primaries"
+#define IJKM_KEY_COLOR_TRC          "color_trc"
+#define IJKM_KEY_COLOR_SPACE        "color_space"
+#define IJKM_KEY_HDR_TYPE           "hdr_type"
+#define IJKM_VAL_HDR_TYPE__SDR      "sdr"
+#define IJKM_VAL_HDR_TYPE__HDR10    "hdr10"     /* PQ (SMPTE ST 2084) */
+#define IJKM_VAL_HDR_TYPE__HLG      "hlg"       /* ARIB STD-B67 */
+#define IJKM_VAL_HDR_TYPE__UNKNOWN  "unknown"   /* 颜色信息缺失，但疑似 HDR（10bit 或 BT.2020） */
+#define IJKM_KEY_MAX_CLL            "max_cll"   /* cd/m2，来自容器层 Content Light Level */
+#define IJKM_KEY_MAX_FALL           "max_fall"  /* cd/m2 */
+#define IJKM_KEY_MASTERING_MAX_LUM  "mastering_max_luminance" /* cd/m2 */
+#define IJKM_KEY_MASTERING_MIN_LUM  "mastering_min_luminance" /* cd/m2 */
 // stream: audio
 #define IJKM_KEY_SAMPLE_RATE    "sample_rate"
 #define IJKM_KEY_CHANNEL_LAYOUT "channel_layout"

@@ -41,6 +41,21 @@ public class IjkMediaMeta {
     public static final String IJKM_KEY_TBR_DEN = "tbr_den";
     public static final String IJKM_KEY_SAR_NUM = "sar_num";
     public static final String IJKM_KEY_SAR_DEN = "sar_den";
+    // video color / HDR
+    public static final String IJKM_KEY_BIT_DEPTH = "bit_depth";
+    public static final String IJKM_KEY_COLOR_RANGE = "color_range";
+    public static final String IJKM_KEY_COLOR_PRIMARIES = "color_primaries";
+    public static final String IJKM_KEY_COLOR_TRC = "color_trc";
+    public static final String IJKM_KEY_COLOR_SPACE = "color_space";
+    public static final String IJKM_KEY_HDR_TYPE = "hdr_type";
+    public static final String IJKM_VAL_HDR_TYPE__SDR = "sdr";
+    public static final String IJKM_VAL_HDR_TYPE__HDR10 = "hdr10";
+    public static final String IJKM_VAL_HDR_TYPE__HLG = "hlg";
+    public static final String IJKM_VAL_HDR_TYPE__UNKNOWN = "unknown";
+    public static final String IJKM_KEY_MAX_CLL = "max_cll";
+    public static final String IJKM_KEY_MAX_FALL = "max_fall";
+    public static final String IJKM_KEY_MASTERING_MAX_LUM = "mastering_max_luminance";
+    public static final String IJKM_KEY_MASTERING_MIN_LUM = "mastering_min_luminance";
     // stream: audio
     public static final String IJKM_KEY_SAMPLE_RATE = "sample_rate";
     public static final String IJKM_KEY_CHANNEL_LAYOUT = "channel_layout";
@@ -242,6 +257,16 @@ public class IjkMediaMeta {
                 streamMeta.mTbrDen = streamMeta.getInt(IJKM_KEY_TBR_DEN);
                 streamMeta.mSarNum = streamMeta.getInt(IJKM_KEY_SAR_NUM);
                 streamMeta.mSarDen = streamMeta.getInt(IJKM_KEY_SAR_DEN);
+                streamMeta.mBitDepth = streamMeta.getInt(IJKM_KEY_BIT_DEPTH);
+                streamMeta.mColorRange = streamMeta.getString(IJKM_KEY_COLOR_RANGE);
+                streamMeta.mColorPrimaries = streamMeta.getString(IJKM_KEY_COLOR_PRIMARIES);
+                streamMeta.mColorTrc = streamMeta.getString(IJKM_KEY_COLOR_TRC);
+                streamMeta.mColorSpace = streamMeta.getString(IJKM_KEY_COLOR_SPACE);
+                streamMeta.mHdrType = streamMeta.getString(IJKM_KEY_HDR_TYPE);
+                streamMeta.mMaxCll = streamMeta.getInt(IJKM_KEY_MAX_CLL);
+                streamMeta.mMaxFall = streamMeta.getInt(IJKM_KEY_MAX_FALL);
+                streamMeta.mMasteringMaxLuminance = streamMeta.getDouble(IJKM_KEY_MASTERING_MAX_LUM);
+                streamMeta.mMasteringMinLuminance = streamMeta.getDouble(IJKM_KEY_MASTERING_MIN_LUM);
 
                 if (videoStreamIndex == index) {
                     meta.mVideoStream = streamMeta;
@@ -285,6 +310,19 @@ public class IjkMediaMeta {
         public int mSarNum;
         public int mSarDen;
 
+        // video color / HDR（可能为 null / 0，表示码流或容器未提供）
+        public int mBitDepth;
+        public String mColorRange;
+        public String mColorPrimaries;
+        public String mColorTrc;
+        public String mColorSpace;
+        /** sdr / hdr10 / hlg / unknown，见 IJKM_VAL_HDR_TYPE__* */
+        public String mHdrType;
+        public int mMaxCll;
+        public int mMaxFall;
+        public double mMasteringMaxLuminance;
+        public double mMasteringMinLuminance;
+
         // audio
         public int mSampleRate;
         public long mChannelLayout;
@@ -327,6 +365,46 @@ public class IjkMediaMeta {
             } catch (NumberFormatException e) {
                 return defaultValue;
             }
+        }
+
+        public double getDouble(String key) {
+            String value = getString(key);
+            if (TextUtils.isEmpty(value))
+                return 0;
+
+            try {
+                return Double.parseDouble(value);
+            } catch (NumberFormatException e) {
+                return 0;
+            }
+        }
+
+        /** 明确是 HDR（PQ 或 HLG） */
+        public boolean isHdr() {
+            return IJKM_VAL_HDR_TYPE__HDR10.equals(mHdrType) || IJKM_VAL_HDR_TYPE__HLG.equals(mHdrType);
+        }
+
+        /** 颜色信息缺失但疑似 HDR（10bit 或 BT.2020），建议上报关注 */
+        public boolean isHdrSuspected() {
+            return IJKM_VAL_HDR_TYPE__UNKNOWN.equals(mHdrType);
+        }
+
+        public String getHdrInline() {
+            if (TextUtils.isEmpty(mHdrType)) {
+                return "N/A";
+            }
+            StringBuilder sb = new StringBuilder(mHdrType.toUpperCase(Locale.US));
+            if (mBitDepth > 0) {
+                sb.append(' ').append(mBitDepth).append("bit");
+            }
+            if (!TextUtils.isEmpty(mColorPrimaries) || !TextUtils.isEmpty(mColorTrc)) {
+                sb.append(" (")
+                        .append(TextUtils.isEmpty(mColorPrimaries) ? "?" : mColorPrimaries)
+                        .append('/')
+                        .append(TextUtils.isEmpty(mColorTrc) ? "?" : mColorTrc)
+                        .append(')');
+            }
+            return sb.toString();
         }
 
         public String getCodecLongNameInline() {
