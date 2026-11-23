@@ -1,6 +1,15 @@
 <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
     <PreferenceCategory android:title="@string/pref_title_general">
+        <!-- 应用语言：不写入 SharedPreferences，由 AppCompatDelegate 保存，见 SettingsFragment -->
+        <ListPreference
+            android:defaultValue=""
+            android:entries="@array/pref_entries_language"
+            android:entryValues="@array/pref_entry_values_language"
+            android:key="@string/pref_key_language"
+            android:persistent="false"
+            android:title="@string/pref_title_language"
+            app:useSimpleSummaryProvider="true" />
         <CheckBoxPreference
             android:defaultValue="false"
             android:disableDependentsState="true"

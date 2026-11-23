@@ -18,6 +18,11 @@
 package tv.danmaku.ijk.media.example.fragments;
 
 import android.os.Bundle;
+
+import androidx.appcompat.app.AppCompatDelegate;
+import androidx.core.os.LocaleListCompat;
+import androidx.preference.ListPreference;
+import androidx.preference.Preference;
 import androidx.preference.PreferenceFragmentCompat;
 
 import tv.danmaku.ijk.media.example.R;
@@ -31,5 +36,31 @@ public class SettingsFragment extends PreferenceFragmentCompat {
     @Override
     public void onCreatePreferences(Bundle bundle, String s) {
         addPreferencesFromResource(R.xml.settings);
+        setupLanguagePreference();
+    }
+
+    /**
+     * 应用语言：值为 "" / "zh" / "en"，"" 表示跟随系统。
+     * 通过 AppCompatDelegate 设置，Android 13+ 与系统「应用语言」同步，低版本由 AppCompat 自动保存；
+     * 设置后 AppCompat 会自动重建当前 Activity。
+     */
+    private void setupLanguagePreference() {
+        ListPreference pref = findPreference(getString(R.string.pref_key_language));
+        if (pref == null)
+            return;
+
+        LocaleListCompat current = AppCompatDelegate.getApplicationLocales();
+        pref.setValue(current.isEmpty() ? "" : current.get(0).getLanguage());
+
+        pref.setOnPreferenceChangeListener(new Preference.OnPreferenceChangeListener() {
+            @Override
+            public boolean onPreferenceChange(Preference preference, Object newValue) {
+                String tag = (String) newValue;
+                AppCompatDelegate.setApplicationLocales(tag.isEmpty()
+                        ? LocaleListCompat.getEmptyLocaleList()
+                        : LocaleListCompat.forLanguageTags(tag));
+                return true;
+            }
+        });
     }
 }

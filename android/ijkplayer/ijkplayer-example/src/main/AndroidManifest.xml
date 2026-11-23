@@ -81,6 +81,16 @@
             </intent-filter>
         </activity>
 
+        <!-- Android 12 及以下由 AppCompat 保存应用语言（设置页「语言」）；13+ 交给系统 -->
+        <service
+            android:name="androidx.appcompat.app.AppLocalesMetadataHolderService"
+            android:enabled="false"
+            android:exported="false">
+            <meta-data
+                android:name="autoStoreLocales"
+                android:value="true" />
+        </service>
+
         <service
             android:name="tv.danmaku.ijk.media.example.services.MediaPlayerService"
             android:enabled="false"

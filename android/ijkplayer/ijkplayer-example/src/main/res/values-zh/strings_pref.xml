@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 设置页文案，中文；key 与选项值见 values/strings_pref.xml（不翻译） -->
+<resources>
+    <string name="pref_title_general">常规</string>
+
+    <string name="pref_title_language">语言</string>
+    <string-array name="pref_entries_language">
+        <item>跟随系统</item>
+        <item>简体中文</item>
+        <item>English</item>
+    </string-array>
+
+    <string name="pref_title_enable_background_play">后台播放</string>
+    <string name="pref_summary_enable_background_play">需要 Android 4.0 及以上</string>
+
+    <string name="pref_title_using_android_player">使用系统播放器</string>
+
+    <string name="pref_title_player">选择播放器</string>
+    <string-array name="pref_entries_player">
+        <item>自动选择</item>
+        <item>AndroidMediaPlayer</item>
+        <item>IjkMediaPlayer</item>
+        <item>IjkExoMediaPlayer</item>
+    </string-array>
+    <string-array name="pref_entry_summaries_player">
+        <item>自动选择</item>
+        <item>AndroidMediaPlayer</item>
+        <item>IjkMediaPlayer</item>
+        <item>IjkExoMediaPlayer</item>
+    </string-array>
+
+    <string name="pref_title_ijkplayer_video">视频：ijkplayer</string>
+    <string name="pref_title_using_media_codec">使用 MediaCodec 硬解</string>
+    <string name="pref_title_using_media_codec_auto_rotate">MediaCodec 自动旋转</string>
+    <string name="pref_title_media_codec_handle_resolution_change">MediaCodec 处理分辨率切换</string>
+
+    <string name="pref_title_pixel_format">像素格式</string>
+    <string-array name="pref_entries_pixel_format">
+        <item>自动选择</item>
+        <item>RGB 565</item>
+        <item>RGB 888</item>
+        <item>RGBX 8888</item>
+        <item>YV12</item>
+        <item>OpenGL ES2</item>
+    </string-array>
+    <string-array name="pref_entry_summaries_pixel_format">
+        <item>自动选择</item>
+        <item>RGB 565</item>
+        <item>RGB 888</item>
+        <item>RGBX 8888</item>
+        <item>YV12</item>
+        <item>OpenGL ES2</item>
+    </string-array>
+
+    <string name="pref_title_ijkplayer_audio">音频：ijkplayer</string>
+    <string name="pref_title_using_opensl_es">使用 OpenSL ES 输出</string>
+
+    <string name="pref_title_render_view">渲染视图</string>
+    <string name="pref_title_enable_no_view">启用 NoView（不渲染）</string>
+    <string name="pref_title_enable_surface_view">启用 SurfaceView</string>
+    <string name="pref_title_enable_texture_view">启用 TextureView</string>
+    <string name="pref_title_enable_detached_surface_texture">启用分离式 SurfaceTexture</string>
+
+    <string name="pref_title_misc">其他</string>
+    <string name="pref_title_using_mediadatasource">使用 MediaDataSource</string>
+</resources>
