@@ -9,13 +9,13 @@
 #
 # 为什么 FFmpeg 必须走源码：
 #   FFToolChain 子模块是自有 fork（ijk-custom 分支），改了 FFmpeg 裁剪配置
-#   （configs/ijk-ffmpeg-config/module-lite.sh，例如启用 rtmps）。
-#   `main.sh install` 下载的是 debugly 上游 Releases 里的预编译包，不包含这些改动。
+#   （configs/ijk-ffmpeg-config/module-lite-ff7.sh，例如启用 rtmps、mp4 muxer）；
+#   上游 Releases 也没有 ijkplayer 可用的 FFmpeg 7 预编译包。
 #
 # 源码编译的前置条件：
 #   - ANDROID_NDK_HOME（或 ANDROID_NDK_ROOT / ANDROID_NDK）指向 NDK 目录
 #   - brew install nasm pkg-config
-#   - 能访问 GitHub（首次 init 会 clone https://github.com/bilibili/FFmpeg.git）
+#   - 能访问 GitHub（首次 init 会 clone https://github.com/FFmpeg/FFmpeg.git）
 #
 # 详细说明见 doc/ffmpeg4_to_7_upgrade.md。
 
@@ -70,11 +70,11 @@ fi
 echo "==> [1/3] 下载预编译包：soundtouch yuv ijkffmpeg（取其中的 openssl）"
 "$TOOLCHAIN" install -l 'soundtouch yuv ijkffmpeg' -p android
 
-# 2. 拉取 bilibili FFmpeg 源码（已存在时复用）
+# 2. 拉取官方 FFmpeg 源码并打 ijk 补丁（已存在时复用）
 echo "==> [2/3] 准备 FFmpeg 7 源码（官方 n7.1.3 + ijk 补丁）：$ARCHS"
 "$TOOLCHAIN" init -p android -l ijkffmpeg7 -a "$ARCHS"
 
-# 3. 交叉编译。用 rebuild（clean + build），保证 module-lite.sh 的改动一定重新 configure
+# 3. 交叉编译。用 rebuild（clean + build），保证 module-lite-ff7.sh 的改动一定重新 configure
 echo "==> [3/3] 源码编译 ijkffmpeg7：$ARCHS"
 "$TOOLCHAIN" compile -p android -l ijkffmpeg7 -a "$ARCHS" -c rebuild
 
