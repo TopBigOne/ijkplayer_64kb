@@ -125,12 +125,22 @@ cmd_start() {
 
     # 2. ffmpeg 推流
     local url="rtmp://127.0.0.1:$RTMP_PORT/live/test"
+    # 注：本机 ffmpeg 4.4 只有 h264_videotoolbox，它会忽略 -bf 0 仍输出 B 帧，
+    # ffmpeg.log 里会持续出现 "Invalid DTS ... replacing by guess"（muxer 已修正，不影响播放）。
     local enc=(-c:v h264_videotoolbox -b:v 1M -g 50 -c:a aac -f flv "$url")
     local ffargs
     case "$mode" in
         pattern) ffargs=(-re -f lavfi -i testsrc=size=640x360:rate=25 -f lavfi -i sine "${enc[@]}") ;;
         camera)  ffargs=(-f avfoundation -framerate 30 -i "0:0" "${enc[@]}") ;;
-        file)    ffargs=(-stream_loop -1 -re -i "$file" "${enc[@]}") ;;
+        file)
+            # 源文件已是 H.264/AAC 时直接 copy：不重编码，推出去的就是原始码流
+            local vc ac cv=(-c:v h264_videotoolbox -b:v 1M -g 50) ca=(-c:a aac)
+            vc="$("$FFMPEG/bin/ffprobe" -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$file" 2>/dev/null)"
+            ac="$("$FFMPEG/bin/ffprobe" -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$file" 2>/dev/null)"
+            [ "$vc" = h264 ] && cv=(-c:v copy)
+            [ "$ac" = aac ] && ca=(-c:a copy)
+            echo "file source: video=${vc:-none} (${cv[*]}), audio=${ac:-none} (${ca[*]})"
+            ffargs=(-stream_loop -1 -re -i "$file" "${cv[@]}" "${ca[@]}" -f flv "$url") ;;
     esac
     "$FF" -nostdin -loglevel warning "${ffargs[@]}" >"$LIVE/ffmpeg.log" 2>&1 &
     echo $! >"$(pidfile ffmpeg)"
