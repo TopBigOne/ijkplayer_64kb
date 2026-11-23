@@ -33,7 +33,10 @@ import androidx.drawerlayout.widget.DrawerLayout;
 import androidx.appcompat.app.AppCompatActivity;
 import android.text.TextUtils;
 import android.util.Log;
+import android.view.GestureDetector;
 import android.view.Menu;
+import android.view.MotionEvent;
+import android.view.View;
 import android.view.MenuItem;
 import android.view.ViewGroup;
 import android.widget.TableLayout;
@@ -59,6 +62,7 @@ public class VideoActivity extends AppCompatActivity implements TracksFragment.I
     private IjkVideoView mVideoView;
     private TextView mToastTextView;
     private TableLayout mHudView;
+    private View mHudCollapsedView;
     private DrawerLayout mDrawerLayout;
     private ViewGroup mRightDrawer;
 
@@ -129,6 +133,8 @@ public class VideoActivity extends AppCompatActivity implements TracksFragment.I
 
         mToastTextView = (TextView) findViewById(R.id.toast_text_view);
         mHudView = (TableLayout) findViewById(R.id.hud_view);
+        mHudCollapsedView = findViewById(R.id.hud_collapsed_view);
+        initHudToggle();
         mDrawerLayout = (DrawerLayout) findViewById(R.id.drawer_layout);
         mRightDrawer = (ViewGroup) findViewById(R.id.right_drawer);
 
@@ -249,5 +255,38 @@ public class VideoActivity extends AppCompatActivity implements TracksFragment.I
             return -1;
 
         return mVideoView.getSelectedTrack(trackType);
+    }
+
+    /** 双击展开的 HUD 收起成灰色圆形按钮，单击按钮重新展开；HUD 收起期间仍在后台刷新数据。 */
+    private void initHudToggle() {
+        final GestureDetector detector = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
+            @Override
+            public boolean onDown(MotionEvent e) {
+                return true;  // 必须消费 DOWN 才能收到后续的双击事件
+            }
+
+            @Override
+            public boolean onDoubleTap(MotionEvent e) {
+                setHudExpanded(false);
+                return true;
+            }
+        });
+        mHudView.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+                return detector.onTouchEvent(event);
+            }
+        });
+        mHudCollapsedView.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                setHudExpanded(true);
+            }
+        });
+    }
+
+    private void setHudExpanded(boolean expanded) {
+        mHudView.setVisibility(expanded ? View.VISIBLE : View.GONE);
+        mHudCollapsedView.setVisibility(expanded ? View.GONE : View.VISIBLE);
     }
 }

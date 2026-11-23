@@ -33,9 +33,28 @@
             android:id="@+id/hud_view"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_gravity="right|center_vertical"
-            android:background="@color/ijk_transparent_dark"
+            android:layout_gravity="top|right"
+            android:layout_marginTop="?attr/actionBarSize"
+            android:layout_marginRight="8dp"
+            android:background="@drawable/hud_bg"
             android:padding="8dp" />
+
+        <!-- HUD 收起态：双击 HUD 收起成此按钮，单击按钮重新展开 -->
+        <TextView
+            android:id="@+id/hud_collapsed_view"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_gravity="top|right"
+            android:layout_marginTop="?attr/actionBarSize"
+            android:layout_marginRight="12dp"
+            android:background="@drawable/hud_collapsed_bg"
+            android:gravity="center"
+            android:lineSpacingMultiplier="0.9"
+            android:text="@string/hud_collapsed"
+            android:textColor="@android:color/white"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
 
         <androidx.appcompat.widget.Toolbar
             android:id="@+id/toolbar"

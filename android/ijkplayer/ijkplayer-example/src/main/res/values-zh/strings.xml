@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 中文（系统语言为中文时生效，简繁通用）；未列出的条目回退到 values/strings.xml -->
+<resources>
+
+    <string name="close">关闭</string>
+    <string name="exit">退出</string>
+    <string name="sample">示例</string>
+    <string name="recent">最近</string>
+    <string name="settings">设置</string>
+    <string name="tracks">轨道</string>
+    <string name="toggle_player">播放器</string>
+    <string name="toggle_render">渲染</string>
+    <string name="toggle_ratio">缩放</string>
+    <string name="show_info">信息</string>
+
+    <!-- 播放页右上角 HUD -->
+    <string name="vdec">视频解码</string>
+    <string name="vdec_avcodec">软解（FFmpeg avcodec）</string>
+    <string name="vdec_mediacodec">硬解（MediaCodec）</string>
+    <string name="fps">帧率（解码/输出）</string>
+    <string name="v_cache">视频缓冲（时长/大小）</string>
+    <string name="a_cache">音频缓冲（时长/大小）</string>
+    <string name="load_cost">起播耗时</string>
+    <string name="seek_cost">拖动耗时</string>
+    <string name="seek_load_cost">拖动后缓冲耗时</string>
+    <string name="tcp_speed">下载网速</string>
+    <string name="bit_rate">码率</string>
+
+    <string name="media_information">媒体信息</string>
+    <string name="mi_player">播放器</string>
+    <string name="mi_media">媒体</string>
+    <string name="mi_profile_level">Profile / Level</string>
+    <string name="mi_pixel_format">像素格式</string>
+    <string name="mi_resolution">分辨率</string>
+    <string name="mi_length">时长</string>
+    <string name="mi_stream_fmt1">流 #%d</string>
+    <string name="mi_type">类型</string>
+    <string name="mi_language">语言</string>
+    <string name="mi_codec">编码格式</string>
+    <string name="mi_frame_rate">帧率</string>
+    <string name="mi_bit_rate">码率</string>
+    <string name="mi_sample_rate">采样率</string>
+    <string name="mi_channels">声道</string>
+
+    <string name="TrackType_video">视频</string>
+    <string name="TrackType_audio">音频</string>
+    <string name="TrackType_subtitle">字幕</string>
+    <string name="TrackType_timedtext">定时文本</string>
+    <string name="TrackType_metadata">元数据</string>
+    <string name="TrackType_unknown">未知</string>
+
+    <string name="VideoView_error_text_invalid_progressive_playback">该文件不支持渐进式播放</string>
+    <string name="VideoView_error_text_unknown">播放出错</string>
+    <string name="VideoView_error_button">确定</string>
+
+    <string name="VideoView_ar_aspect_fit_parent">等比 / 适应屏幕</string>
+    <string name="VideoView_ar_aspect_fill_parent">等比 / 铺满屏幕</string>
+    <string name="VideoView_ar_aspect_wrap_content">等比 / 原始大小</string>
+    <string name="VideoView_ar_match_parent">拉伸 / 铺满屏幕</string>
+    <string name="VideoView_ar_16_9_fit_parent">16:9 / 适应屏幕</string>
+    <string name="VideoView_ar_4_3_fit_parent">4:3 / 适应屏幕</string>
+
+    <string name="VideoView_render_none">渲染：无</string>
+    <string name="VideoView_render_surface_view">渲染：SurfaceView</string>
+    <string name="VideoView_render_texture_view">渲染：TextureView</string>
+
+    <string name="VideoView_player_none">播放器：无</string>
+    <string name="VideoView_player_AndroidMediaPlayer">播放器：系统 MediaPlayer</string>
+    <string name="VideoView_player_IjkMediaPlayer">播放器：IjkMediaPlayer</string>
+    <string name="VideoView_player_IjkExoMediaPlayer">播放器：IjkExoMediaPlayer</string>
+
+</resources>

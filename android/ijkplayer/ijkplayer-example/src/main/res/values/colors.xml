@@ -23,4 +23,9 @@
     <color name="sample_text_tertiary">#8F959E</color>
     <color name="sample_chip_bg">#F2F3F5</color>
 
+    <!-- 播放页 HUD：浅肉色底 + 暖棕色文字 -->
+    <color name="hud_bg">#EBF3D9C6</color>
+    <color name="hud_text_name">#8A5A44</color>
+    <color name="hud_text_value">#3B2A20</color>
+
 </resources>

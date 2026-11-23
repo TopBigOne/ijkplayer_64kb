@@ -14,7 +14,10 @@
     <string name="toggle_render">Render</string>
     <string name="toggle_ratio">Scale</string>
     <string name="show_info">Info</string>
+    <string name="hud_collapsed">Dec\nInfo</string>
     <string name="vdec">vdec</string>
+    <string name="vdec_avcodec">avcodec</string>
+    <string name="vdec_mediacodec">MediaCodec</string>
     <string name="fps">fps</string>
     <string name="v_cache">v-cache</string>
     <string name="a_cache">a-cache</string>
