@@ -4,10 +4,10 @@
 # FFToolChain/build/product/android/universal/（ijkplayer-cmake 通过 third-libs 软链接读取）。
 #
 # 用法：
-#   ./install-ffmpeg.sh              默认：先下载预编译包，再用源码编译的 ijkffmpeg 覆盖 arm64/armv7a
-#   ./install-ffmpeg.sh --prebuilt   全部下载上游预编译包（快，但 ijkffmpeg 不含我们的定制，如 rtmps）
+#   ./install-ffmpeg.sh              下载 soundtouch/yuv/openssl 预编译包，再源码编译 FFmpeg 7（ijkffmpeg7）
+#   （FFmpeg 7 没有可用的上游预编译包，原 --prebuilt 选项已移除）
 #
-# 为什么 ijkffmpeg 默认走源码：
+# 为什么 FFmpeg 必须走源码：
 #   FFToolChain 子模块是自有 fork（ijk-custom 分支），改了 FFmpeg 裁剪配置
 #   （configs/ijk-ffmpeg-config/module-lite.sh，例如启用 rtmps）。
 #   `main.sh install` 下载的是 debugly 上游 Releases 里的预编译包，不包含这些改动。
@@ -17,7 +17,7 @@
 #   - brew install nasm pkg-config
 #   - 能访问 GitHub（首次 init 会 clone https://github.com/bilibili/FFmpeg.git）
 #
-# 详细说明见 doc/android_build.md「从源码编译 ijkffmpeg」。
+# 详细说明见 doc/ffmpeg4_to_7_upgrade.md。
 
 set -e
 
@@ -45,10 +45,8 @@ if [[ ! -x "$TOOLCHAIN" ]]; then
 fi
 
 if [[ $PREBUILT -eq 1 ]]; then
-    echo "==> [--prebuilt] 下载上游预编译包：soundtouch yuv ijkffmpeg（含依赖 openssl）"
-    echo "    注意：ijkffmpeg 不含自有 fork 的定制（如 rtmps）"
-    "$TOOLCHAIN" install -l 'soundtouch yuv ijkffmpeg' -p android
-    exit 0
+    echo "FFmpeg 7（ijkffmpeg7）没有上游预编译包，请去掉 --prebuilt 从源码编译"
+    exit 1
 fi
 
 # ---- 源码编译前检查，缺什么直接报错，不自动安装 ----
@@ -73,13 +71,13 @@ echo "==> [1/3] 下载预编译包：soundtouch yuv ijkffmpeg（取其中的 ope
 "$TOOLCHAIN" install -l 'soundtouch yuv ijkffmpeg' -p android
 
 # 2. 拉取 bilibili FFmpeg 源码（已存在时复用）
-echo "==> [2/3] 准备 ijkffmpeg 源码：$ARCHS"
-"$TOOLCHAIN" init -p android -l ijkffmpeg -a "$ARCHS"
+echo "==> [2/3] 准备 FFmpeg 7 源码（官方 n7.1.3 + ijk 补丁）：$ARCHS"
+"$TOOLCHAIN" init -p android -l ijkffmpeg7 -a "$ARCHS"
 
 # 3. 交叉编译。用 rebuild（clean + build），保证 module-lite.sh 的改动一定重新 configure
-echo "==> [3/3] 源码编译 ijkffmpeg：$ARCHS"
-"$TOOLCHAIN" compile -p android -l ijkffmpeg -a "$ARCHS" -c rebuild
+echo "==> [3/3] 源码编译 ijkffmpeg7：$ARCHS"
+"$TOOLCHAIN" compile -p android -l ijkffmpeg7 -a "$ARCHS" -c rebuild
 
 echo
-echo "完成。产物：FFToolChain/build/product/android/universal/ijkffmpeg/ijkffmpeg-{arm64,armv7a}/"
-echo "校验 rtmps：grep CONFIG_RTMPS_PROTOCOL $THIS_DIR/../FFToolChain/build/product/android/universal/ijkffmpeg/ijkffmpeg-arm64/config.h"
+echo "完成。产物：FFToolChain/build/product/android/universal/ijkffmpeg7/ijkffmpeg7-{arm64,armv7a}/"
+echo "校验 rtmps：grep CONFIG_RTMPS_PROTOCOL $THIS_DIR/../FFToolChain/build/product/android/universal/ijkffmpeg7/ijkffmpeg7-arm64/include/libffmpeg/config_components.h"

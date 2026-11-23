@@ -21,6 +21,7 @@
 #include "libavutil/time.h"
 #include "libavformat/avformat.h"
 #include "libavformat/url.h"
+#include "libavformat/demux.h"
 #include "libavformat/avio_internal.h"
 #include "libavformat/id3v2.h"
 #include "libavformat/flv.h"
@@ -157,7 +158,7 @@ typedef struct PlayList {
     // demuxer related
     AVFormatContext* parent;
     uint8_t* read_buffer;
-    AVIOContext pb;
+    FFIOContext pb;   /* FFmpeg 5.1+：ffio_init_context 要求 FFIOContext，公开部分在 pb.pub */
     AVFormatContext* ctx;
     AVPacket pkt;
 
@@ -921,7 +922,8 @@ static int open_url(LasContext* c, URLContext** uc, const char* url,
     if (!proto_name)
         return AVERROR_INVALIDDATA;
 
-    ret = ffurl_open_whitelist(uc, url,  AVIO_FLAG_READ, c->interrupt_callback, &tmp, c->ctx->protocol_whitelist, c->ctx->protocol_blacklist, c->ctx);
+    /* parent 参数要求 URLContext*，原代码传的是 AVFormatContext*（av_opt_copy 因类不匹配直接返回，从未生效），改为 NULL 保持原行为 */
+    ret = ffurl_open_whitelist(uc, url,  AVIO_FLAG_READ, c->interrupt_callback, &tmp, c->ctx->protocol_whitelist, c->ctx->protocol_blacklist, NULL);
     if (ret >= 0) {
         log_info("ffurl_open_whitelist succeeds");
         // update cookies on http response with setcookies.
@@ -1380,7 +1382,7 @@ int PlayList_open_rep(PlayList* playlist, FlvTag* tag, AVFormatContext* s) {
     ffio_init_context(&playlist->pb, playlist->read_buffer, INITIAL_BUFFER_SIZE, 0, playlist,
                       PlayList_read_data, NULL, NULL);
 
-    playlist->ctx->pb = &playlist->pb;
+    playlist->ctx->pb = &playlist->pb.pub;
     playlist->ctx->flags |= s->flags & ~AVFMT_FLAG_CUSTOM_IO;
 
     SDL_LockMutex(playlist->rw_mutex);
@@ -1526,7 +1528,7 @@ static void PlayList_abort(PlayList* playlist) {
 void PlayList_close_rep(PlayList* playlist) {
     SDL_LockMutex(playlist->rw_mutex);
     avformat_close_input(&playlist->ctx);
-    av_freep(&playlist->pb.buffer);
+    av_freep(&playlist->pb.pub.buffer);
     log_info("close_index:%d finished", playlist->cur_rep_index);
     SDL_UnlockMutex(playlist->rw_mutex);
 }
@@ -1757,7 +1759,7 @@ static int las_close(AVFormatContext* s) {
     return 0;
 }
 
-static int las_probe(AVProbeData* p) {
+static int las_probe(const AVProbeData *p) {
     if (p->filename && av_strstart(p->filename, "ijklas:", NULL))
         return AVPROBE_SCORE_MAX;
 
@@ -1941,7 +1943,7 @@ static int las_read_packet(AVFormatContext* s, AVPacket* pkt) {
         ret = av_read_frame(playlist->ctx, &playlist->pkt);
         if (ret < 0) {
             reset_packet(&playlist->pkt);
-            if (avio_feof(&playlist->pb) || ret == AVERROR_EOF) {
+            if (avio_feof(&playlist->pb.pub) || ret == AVERROR_EOF) {
                 // change rep if needed
                 if (playlist->cur_switch_index != playlist->reading_tag.switch_index) {
                     PlayList_close_rep(playlist);
@@ -2061,18 +2063,19 @@ static const AVClass ijklas_class = {
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
-AVInputFormat ijkff_ijklas_demuxer = {
-    .name           = "ijklas",
-    .long_name      = "Live Adaptive Streaming",
-    .priv_class     = &ijklas_class,
+/* FFmpeg 7：demuxer 回调移到内部结构 FFInputFormat，公开字段放在 .p 中 */
+FFInputFormat ijkff_ijklas_demuxer = {
+    .p.name         = "ijklas",
+    .p.long_name    = "Live Adaptive Streaming",
+    .p.priv_class   = &ijklas_class,
+    .p.extensions   = "las",
+    .p.flags        = AVFMT_NOFILE,
     .priv_data_size = sizeof(LasContext),
     .read_probe     = las_probe,
     .read_header    = las_read_header,
     .read_packet    = las_read_packet,
     .read_close     = las_close,
     .read_seek      = las_read_seek,
-    .extensions     = "las",
-    .flags          = AVFMT_NOFILE
 };
 
 

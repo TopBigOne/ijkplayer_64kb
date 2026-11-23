@@ -48,6 +48,7 @@
 #include "libavutil/avassert.h"
 #include "libavutil/time.h"
 #include "libavformat/avformat.h"
+#include "libavformat/demux.h"   /* ffifmt()：FFmpeg 7 中 read_seek 等回调移到内部 FFInputFormat */
 #if CONFIG_AVDEVICE
 #include "libavdevice/avdevice.h"
 #endif
@@ -516,7 +517,12 @@ static int convert_image(FFPlayer *ffp, AVFrame *src_frame, int64_t src_frame_pt
         goto fail2;
     }
 
-    ret = avcodec_encode_video2(img_info->frame_img_codec_ctx, &avpkt, dst_frame, &got_packet);
+    /* FFmpeg 5+ 删除了 avcodec_encode_video2；PNG 编码器无延迟，送一帧即可取到一个包 */
+    ret = avcodec_send_frame(img_info->frame_img_codec_ctx, dst_frame);
+    if (ret >= 0) {
+        ret = avcodec_receive_packet(img_info->frame_img_codec_ctx, &avpkt);
+        got_packet = ret >= 0;
+    }
 
     if (ret >= 0 && got_packet > 0) {
         strcpy(file_path, img_info->img_path);
@@ -584,7 +590,7 @@ static int decoder_decode_frame(FFPlayer *ffp, Decoder *d, AVFrame *frame, AVSub
                         if (ret >= 0) {
                             AVRational tb = (AVRational){1, frame->sample_rate};
                             if (frame->pts != AV_NOPTS_VALUE)
-                                frame->pts = av_rescale_q(frame->pts, av_codec_get_pkt_timebase(d->avctx), tb);
+                                frame->pts = av_rescale_q(frame->pts, d->avctx->pkt_timebase, tb);
                             else if (d->next_pts != AV_NOPTS_VALUE)
                                 frame->pts = av_rescale_q(d->next_pts, d->next_pts_tb, tb);
                             if (frame->pts != AV_NOPTS_VALUE) {
@@ -1471,16 +1477,15 @@ display:
             else if (is->audio_st)
                 av_diff = get_master_clock(is) - get_clock(&is->audclk);
             av_log(NULL, AV_LOG_INFO,
-                   "%7.2f %s:%7.3f fd=%4d aq=%5dKB vq=%5dKB sq=%5dB f=%"PRId64"/%"PRId64"   \r",
+                   /* FFmpeg 7：pts_correction_num_faulty_* 已变为解码器私有字段，去掉 f= 统计 */
+                   "%7.2f %s:%7.3f fd=%4d aq=%5dKB vq=%5dKB sq=%5dB   \r",
                    get_master_clock(is),
                    (is->audio_st && is->video_st) ? "A-V" : (is->video_st ? "M-V" : (is->audio_st ? "M-A" : "   ")),
                    av_diff,
                    is->frame_drops_early + is->frame_drops_late,
                    aqsize / 1024,
                    vqsize / 1024,
-                   sqsize,
-                   is->video_st ? is->viddec.avctx->pts_correction_num_faulty_dts : 0,
-                   is->video_st ? is->viddec.avctx->pts_correction_num_faulty_pts : 0);
+                   sqsize);
             fflush(stdout);
             last_time = cur_time;
         }
@@ -2481,6 +2486,37 @@ static int synchronize_audio(VideoState *is, int nb_samples)
  * stored in is->audio_buf, with size in bytes given by the return
  * value.
  */
+/*
+ * FFmpeg 7 删除了 int64 声道掩码 API（channel_layout/channels 字段、av_get_default_channel_layout 等），
+ * 改用 AVChannelLayout。ff_ffplay 内部（AudioParams、audio_open、SDL aout）仍沿用“声道掩码 + 声道数”，
+ * 只在与 FFmpeg 交互处用下面的函数转换。
+ */
+static int64_t ffp_default_ch_mask(int nb_channels)
+{
+    AVChannelLayout layout;
+    int64_t         mask = 0;
+
+    av_channel_layout_default(&layout, nb_channels);
+    if (layout.order == AV_CHANNEL_ORDER_NATIVE)
+        mask = (int64_t)layout.u.mask;
+    av_channel_layout_uninit(&layout);
+    return mask;
+}
+
+/* 等价于旧逻辑：掩码有效且与声道数一致则用之，否则按声道数取默认布局 */
+static int64_t ffp_ch_layout_to_mask(const AVChannelLayout *layout)
+{
+    if (layout->order == AV_CHANNEL_ORDER_NATIVE && layout->u.mask &&
+        av_popcount64(layout->u.mask) == layout->nb_channels)
+        return (int64_t)layout->u.mask;
+    return ffp_default_ch_mask(layout->nb_channels);
+}
+
+static int ffp_ch_mask_nb_channels(int64_t mask)
+{
+    return av_popcount64((uint64_t)mask);
+}
+
 static int audio_decode_frame(FFPlayer *ffp)
 {
     VideoState *is = ffp->is;
@@ -2524,34 +2560,38 @@ reload:
         frame_queue_next(&is->sampq);
     } while (af->serial != is->audioq.serial);
 
-    data_size = av_samples_get_buffer_size(NULL, af->frame->channels,
+    data_size = av_samples_get_buffer_size(NULL, af->frame->ch_layout.nb_channels,
                                            af->frame->nb_samples,
                                            af->frame->format, 1);
 
-    dec_channel_layout =
-        (af->frame->channel_layout && af->frame->channels == av_get_channel_layout_nb_channels(af->frame->channel_layout)) ?
-        af->frame->channel_layout : av_get_default_channel_layout(af->frame->channels);
+    dec_channel_layout = ffp_ch_layout_to_mask(&af->frame->ch_layout);
     wanted_nb_samples = synchronize_audio(is, af->frame->nb_samples);
 
     if (af->frame->format        != is->audio_src.fmt            ||
         dec_channel_layout       != is->audio_src.channel_layout ||
         af->frame->sample_rate   != is->audio_src.freq           ||
         (wanted_nb_samples       != af->frame->nb_samples && !is->swr_ctx)) {
-        AVDictionary *swr_opts = NULL;
+        AVDictionary   *swr_opts = NULL;
+        AVChannelLayout out_layout, in_layout;
+        int             swr_ret;
         swr_free(&is->swr_ctx);
-        is->swr_ctx = swr_alloc_set_opts(NULL,
-                                         is->audio_tgt.channel_layout, is->audio_tgt.fmt, is->audio_tgt.freq,
-                                         dec_channel_layout,           af->frame->format, af->frame->sample_rate,
-                                         0, NULL);
-        if (!is->swr_ctx) {
+        av_channel_layout_from_mask(&out_layout, is->audio_tgt.channel_layout);
+        av_channel_layout_from_mask(&in_layout,  dec_channel_layout);
+        swr_ret = swr_alloc_set_opts2(&is->swr_ctx,
+                                      &out_layout, is->audio_tgt.fmt, is->audio_tgt.freq,
+                                      &in_layout,  af->frame->format, af->frame->sample_rate,
+                                      0, NULL);
+        av_channel_layout_uninit(&out_layout);
+        av_channel_layout_uninit(&in_layout);
+        if (swr_ret < 0 || !is->swr_ctx) {
             av_log(NULL, AV_LOG_ERROR,
                    "Cannot create sample rate converter for conversion of %d Hz %s %d channels to %d Hz %s %d channels!\n",
-                    af->frame->sample_rate, av_get_sample_fmt_name(af->frame->format), af->frame->channels,
+                    af->frame->sample_rate, av_get_sample_fmt_name(af->frame->format), af->frame->ch_layout.nb_channels,
                     is->audio_tgt.freq, av_get_sample_fmt_name(is->audio_tgt.fmt), is->audio_tgt.channels);
             return -1;
         }
         av_dict_copy(&swr_opts, ffp->swr_opts, 0);
-        if (af->frame->channel_layout == AV_CH_LAYOUT_5POINT1_BACK)
+        if (dec_channel_layout == AV_CH_LAYOUT_5POINT1_BACK)
             av_opt_set_double(is->swr_ctx, "center_mix_level", ffp->preset_5_1_center_mix_level, 0);
         av_opt_set_dict(is->swr_ctx, &swr_opts);
         av_dict_free(&swr_opts);
@@ -2559,13 +2599,13 @@ reload:
         if (swr_init(is->swr_ctx) < 0) {
             av_log(NULL, AV_LOG_ERROR,
                    "Cannot create sample rate converter for conversion of %d Hz %s %d channels to %d Hz %s %d channels!\n",
-                    af->frame->sample_rate, av_get_sample_fmt_name(af->frame->format), af->frame->channels,
+                    af->frame->sample_rate, av_get_sample_fmt_name(af->frame->format), af->frame->ch_layout.nb_channels,
                     is->audio_tgt.freq, av_get_sample_fmt_name(is->audio_tgt.fmt), is->audio_tgt.channels);
             swr_free(&is->swr_ctx);
             return -1;
         }
         is->audio_src.channel_layout = dec_channel_layout;
-        is->audio_src.channels       = af->frame->channels;
+        is->audio_src.channels       = af->frame->ch_layout.nb_channels;
         is->audio_src.freq = af->frame->sample_rate;
         is->audio_src.fmt = af->frame->format;
     }
@@ -2762,13 +2802,13 @@ static int audio_open(FFPlayer *opaque, int64_t wanted_channel_layout, int wante
     env = SDL_getenv("SDL_AUDIO_CHANNELS");
     if (env) {
         wanted_nb_channels = atoi(env);
-        wanted_channel_layout = av_get_default_channel_layout(wanted_nb_channels);
+        wanted_channel_layout = ffp_default_ch_mask(wanted_nb_channels);
     }
-    if (!wanted_channel_layout || wanted_nb_channels != av_get_channel_layout_nb_channels(wanted_channel_layout)) {
-        wanted_channel_layout = av_get_default_channel_layout(wanted_nb_channels);
+    if (!wanted_channel_layout || wanted_nb_channels != ffp_ch_mask_nb_channels(wanted_channel_layout)) {
+        wanted_channel_layout = ffp_default_ch_mask(wanted_nb_channels);
         wanted_channel_layout &= ~AV_CH_LAYOUT_STEREO_DOWNMIX;
     }
-    wanted_nb_channels = av_get_channel_layout_nb_channels(wanted_channel_layout);
+    wanted_nb_channels = ffp_ch_mask_nb_channels(wanted_channel_layout);
     wanted_spec.channels = wanted_nb_channels;
     wanted_spec.freq = wanted_sample_rate;
     if (wanted_spec.freq <= 0 || wanted_spec.channels <= 0) {
@@ -2798,7 +2838,7 @@ static int audio_open(FFPlayer *opaque, int64_t wanted_channel_layout, int wante
                 return -1;
             }
         }
-        wanted_channel_layout = av_get_default_channel_layout(wanted_spec.channels);
+        wanted_channel_layout = ffp_default_ch_mask(wanted_spec.channels);
     }
     if (spec.format != AUDIO_S16SYS) {
         av_log(NULL, AV_LOG_ERROR,
@@ -2806,7 +2846,7 @@ static int audio_open(FFPlayer *opaque, int64_t wanted_channel_layout, int wante
         return -1;
     }
     if (spec.channels != wanted_spec.channels) {
-        wanted_channel_layout = av_get_default_channel_layout(spec.channels);
+        wanted_channel_layout = ffp_default_ch_mask(spec.channels);
         if (!wanted_channel_layout) {
             av_log(NULL, AV_LOG_ERROR,
                    "SDL advised channel count %d is not supported!\n", spec.channels);
@@ -2853,7 +2893,7 @@ static int stream_component_open(FFPlayer *ffp, int stream_index)
     ret = avcodec_parameters_to_context(avctx, ic->streams[stream_index]->codecpar);
     if (ret < 0)
         goto fail;
-    av_codec_set_pkt_timebase(avctx, ic->streams[stream_index]->time_base);
+    avctx->pkt_timebase = ic->streams[stream_index]->time_base;
 
     codec = avcodec_find_decoder(avctx->codec_id);
 
@@ -2875,12 +2915,12 @@ static int stream_component_open(FFPlayer *ffp, int stream_index)
     }
 
     avctx->codec_id = codec->id;
-    if(stream_lowres > av_codec_get_max_lowres(codec)){
+    if(stream_lowres > codec->max_lowres){
         av_log(avctx, AV_LOG_WARNING, "The maximum value for lowres supported by the decoder is %d\n",
-                av_codec_get_max_lowres(codec));
-        stream_lowres = av_codec_get_max_lowres(codec);
+                codec->max_lowres);
+        stream_lowres = codec->max_lowres;
     }
-    av_codec_set_lowres(avctx, stream_lowres);
+    avctx->lowres = stream_lowres;
 
 #if FF_API_EMU_EDGE
     if(stream_lowres) avctx->flags |= CODEC_FLAG_EMU_EDGE;
@@ -2936,8 +2976,8 @@ static int stream_component_open(FFPlayer *ffp, int stream_index)
         }
 #else
         sample_rate    = avctx->sample_rate;
-        nb_channels    = avctx->channels;
-        channel_layout = avctx->channel_layout;
+        nb_channels    = avctx->ch_layout.nb_channels;
+        channel_layout = ffp_ch_layout_to_mask(&avctx->ch_layout);
 #endif
 
         /* prepare audio output */
@@ -2960,7 +3000,7 @@ static int stream_component_open(FFPlayer *ffp, int stream_index)
         is->audio_st = ic->streams[stream_index];
 
         decoder_init(&is->auddec, avctx, &is->audioq, is->continue_read_thread);
-        if ((is->ic->iformat->flags & (AVFMT_NOBINSEARCH | AVFMT_NOGENSEARCH | AVFMT_NO_BYTE_SEEK)) && !is->ic->iformat->read_seek) {
+        if ((is->ic->iformat->flags & (AVFMT_NOBINSEARCH | AVFMT_NOGENSEARCH | AVFMT_NO_BYTE_SEEK)) && !ffifmt(is->ic->iformat)->read_seek) {
             is->auddec.start_pts = is->audio_st->start_time;
             is->auddec.start_pts_tb = is->audio_st->time_base;
         }
@@ -3156,8 +3196,8 @@ static int is_realtime(AVFormatContext *s)
     )
         return 1;
 
-    if(s->pb && (   !strncmp(s->filename, "rtp:", 4)
-                 || !strncmp(s->filename, "udp:", 4)
+    if(s->pb && (   !strncmp(s->url, "rtp:", 4)
+                 || !strncmp(s->url, "udp:", 4)
                 )
     )
         return 1;
@@ -3524,7 +3564,7 @@ static int read_thread(void *arg)
             ret = avformat_seek_file(is->ic, -1, seek_min, seek_target, seek_max, is->seek_flags);
             if (ret < 0) {
                 av_log(NULL, AV_LOG_ERROR,
-                       "%s: error while seeking\n", is->ic->filename);
+                       "%s: error while seeking\n", is->ic->url);
             } else {
                 if (is->audio_stream >= 0) {
                     packet_queue_flush(&is->audioq);
@@ -3933,26 +3973,7 @@ static int video_refresh_thread(void *arg)
     return 0;
 }
 
-static int lockmgr(void **mtx, enum AVLockOp op)
-{
-    switch (op) {
-    case AV_LOCK_CREATE:
-        *mtx = SDL_CreateMutex();
-        if (!*mtx) {
-            av_log(NULL, AV_LOG_FATAL, "SDL_CreateMutex(): %s\n", SDL_GetError());
-            return 1;
-        }
-        return 0;
-    case AV_LOCK_OBTAIN:
-        return !!SDL_LockMutex(*mtx);
-    case AV_LOCK_RELEASE:
-        return !!SDL_UnlockMutex(*mtx);
-    case AV_LOCK_DESTROY:
-        SDL_DestroyMutex(*mtx);
-        return 0;
-    }
-    return 1;
-}
+/* FFmpeg 4.0 起内部自行加锁，av_lockmgr_register 已在 FFmpeg 5 删除，原 lockmgr 回调移除 */
 
 // FFP_MERGE: main
 
@@ -4030,21 +4051,14 @@ void ffp_global_init()
         return;
 
     ALOGD("ijkmediaplayer version : %s", ijkmp_version());
-    /* register all codecs, demux and protocols */
-    avcodec_register_all();
-#if CONFIG_AVDEVICE
-    avdevice_register_all();
-#endif
-#if CONFIG_AVFILTER
-    avfilter_register_all();
-#endif
-    av_register_all();
+    /* FFmpeg 5+ 不再需要 avcodec_register_all / av_register_all / avfilter_register_all，
+     * 编解码器与 (de)muxer 列表在编译期固定；只需把 ijk 自定义协议/demuxer 挂到补丁预留的占位上。
+     * 播放器不使用 libavdevice（ffmpeg7 预编译包虽开启了 CONFIG_AVDEVICE，但不链接该库），不再调用 avdevice_register_all */
 
     ijkav_register_all();
 
     avformat_network_init();
 
-    av_lockmgr_register(lockmgr);
     av_log_set_callback(ffp_log_callback_brief);
 
     av_init_packet(&flush_pkt);
@@ -4058,7 +4072,6 @@ void ffp_global_uninit()
     if (!g_ffmpeg_global_inited)
         return;
 
-    av_lockmgr_register(NULL);
 
     // FFP_MERGE: uninit_opts
 
@@ -4118,7 +4131,8 @@ static void *ffp_context_child_next(void *obj, void *prev)
     return NULL;
 }
 
-static const AVClass *ffp_context_child_class_next(const AVClass *prev)
+/* FFmpeg 5+：child_class_next 换成迭代器式的 child_class_iterate */
+static const AVClass *ffp_context_child_class_iterate(void **iter)
 {
     return NULL;
 }
@@ -4129,7 +4143,7 @@ const AVClass ffp_context_class = {
     .option           = ffp_context_options,
     .version          = LIBAVUTIL_VERSION_INT,
     .child_next       = ffp_context_child_next,
-    .child_class_next = ffp_context_child_class_next,
+    .child_class_iterate = ffp_context_child_class_iterate,
 };
 
 static const char *ijk_version_info()
@@ -4429,17 +4443,8 @@ int ffp_prepare_async_l(FFPlayer *ffp, const char *file_name)
         av_dict_set(&ffp->format_opts, "timeout", NULL, 0);
     }
 
-    /* there is a length limit in avformat */
-    /* ws/wss 走 ijkws 自定义 AVIO，不经 FFmpeg 协议层，保留原始长 URL 不改写 */
-    if (strlen(file_name) + 1 > 1024 &&
-        !av_stristart(file_name, "ws://", NULL) &&
-        !av_stristart(file_name, "wss://", NULL)) {
-        av_log(ffp, AV_LOG_ERROR, "%s too long url\n", __func__);
-        if (avio_find_protocol_name("ijklongurl:")) {
-            av_dict_set(&ffp->format_opts, "ijklongurl-url", file_name, 0);
-            file_name = "ijklongurl:";
-        }
-    }
+    /* FFmpeg 4.1+ 的 AVFormatContext.url / URLContext.filename 已是动态长度，
+     * 不再有 1024 字节限制，原 ijklongurl 长 URL 改写已移除。 */
 
     av_log(NULL, AV_LOG_INFO, "===== versions =====\n");
     ffp_show_version_str(ffp, "ijkplayer     ",      ijk_version_info());

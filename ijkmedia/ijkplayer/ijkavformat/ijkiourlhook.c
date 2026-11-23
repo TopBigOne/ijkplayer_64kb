@@ -20,12 +20,15 @@
  */
 
 #include <assert.h>
+#include <inttypes.h>
+#include <stdlib.h>
+#include <string.h>
 #include "ijkiourl.h"
 #include "ijkioprotocol.h"
 #include "ijkplayer/ijkavutil/ijkutils.h"
 #include "libavutil/log.h"
 
-#include "libavutil/application.h"
+#include "libavformat/application.h"
 
 typedef struct Context {
     IjkURLContext   *inner;

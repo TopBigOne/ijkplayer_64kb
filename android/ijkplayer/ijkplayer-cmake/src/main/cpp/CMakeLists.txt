@@ -17,6 +17,11 @@ project(ijkplayer)
 # 此处统一关闭该警告以保证 C 和 C++ 文件都能正常编译。
 # ============================================================
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-int-conversion")
+# FFmpeg 7 迁移：多处 API 的指针参数类型变化（如 size_t* / FFIOContext*），
+# 传错类型只报 warning 却会在运行时写坏内存，这里强制为错误。
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Werror=incompatible-pointer-types")
+# 仅丢失 const 限定（如 const AVCodec* → AVCodec*）不涉及内存布局，保持为 warning
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-error=incompatible-pointer-types-discards-qualifiers")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-int-conversion")
 
 # ============================================================
@@ -102,19 +107,28 @@ add_library(${CMAKE_PROJECT_NAME}
 # ============================================================
 target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "-Wl,-z,max-page-size=16384")
 
+# ijkffmpeg7 启用了 arm/aarch64 NEON 汇编，汇编中以 PC 相对寻址引用 ff_tx_tab_* 等全局表；
+# 链接进 .so 时这些符号默认可被抢占，lld 会拒绝该类重定位。
+# -Bsymbolic 让库内符号在库内直接绑定（FFmpeg 自身构建动态库时同样使用），libijkplayer.so 不依赖符号抢占。
+target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "-Wl,-Bsymbolic")
+
 # ============================================================
 # 第三方预编译静态库路径（按 ABI 区分目录）
 # 所有第三方库均以预编译静态库（.a）形式提供，
 # 最终会被静态链接进 libijkplayer.so，无需额外分发独立 .so。
 # ============================================================
-set(FFMPEG_LIB_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/third-libs/ijkffmpeg/ijkffmpeg-${ARCH}/lib)
+# FFmpeg 7：FFToolChain 源码编译的 ijkffmpeg7（官方 n7.1.3 + patches/ffmpeg-n7.1.1，
+#   ijk-ffmpeg-config/module-lite-ff7.sh 裁剪，只依赖 OpenSSL 1.1.1w）
+#   编译：android/install-ffmpeg.sh（或 FFToolChain/main.sh compile -p android -l ijkffmpeg7）
+set(FFMPEG_LIB_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/third-libs/ijkffmpeg7/ijkffmpeg7-${ARCH}/lib)
+# OpenSSL 1.1.1w：FFmpeg 与 ijkws（直接操作 libijkwebsockets.so 内的 SSL 对象）共用同一版本
 set(OPENSSL_LIB_DIR    ${CMAKE_CURRENT_SOURCE_DIR}/third-libs/openssl/openssl-${ARCH}/lib)
 set(SOUNDTOUCH_LIB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third-libs/soundtouch/soundtouch-${ARCH}/lib)
 set(YUV_LIB_DIR        ${CMAKE_CURRENT_SOURCE_DIR}/third-libs/yuv/yuv-${ARCH}/lib)
 
 # 第三方库头文件路径（FFmpeg、SoundTouch、libyuv）
 include_directories(
-    third-libs/ijkffmpeg/ijkffmpeg-${ARCH}/include
+    third-libs/ijkffmpeg7/ijkffmpeg7-${ARCH}/include
     third-libs/soundtouch/soundtouch-${ARCH}/include
     third-libs/yuv/yuv-${ARCH}/include
 )
@@ -166,6 +180,7 @@ target_link_libraries(ijkffmpeg-lib INTERFACE
     ${FFMPEG_LIB_DIR}/libswscale.a    # 图像缩放与色彩转换
     ${FFMPEG_LIB_DIR}/libavutil.a     # 公共工具函数库（必须放最后）
 )
+
 
 # ============================================================
 # libwebsockets 动态库（ws/wss 收流，供 ijkavformat/ijkws.c 使用）

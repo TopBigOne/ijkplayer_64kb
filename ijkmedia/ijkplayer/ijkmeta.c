@@ -167,7 +167,7 @@ static int64_t get_bit_rate(AVCodecParameters *codecpar)
             break;
         case AVMEDIA_TYPE_AUDIO:
             bits_per_sample = av_get_bits_per_sample(codecpar->codec_id);
-            bit_rate = bits_per_sample ? codecpar->sample_rate * codecpar->channels * bits_per_sample : codecpar->bit_rate;
+            bit_rate = bits_per_sample ? codecpar->sample_rate * codecpar->ch_layout.nb_channels * bits_per_sample : codecpar->bit_rate;
             break;
         default:
             bit_rate = 0;
@@ -252,20 +252,21 @@ static void fill_video_color_meta(IjkMediaMeta *stream_meta, AVStream *st)
     ijkmeta_set_string_l(stream_meta, IJKM_KEY_HDR_TYPE, hdr_type);
 
     /* 容器层（如 mp4 的 mdcv/clli）携带的 HDR 静态元数据；码流 SEI 里的只能在解码后从帧上拿，这里不处理 */
-    int size = 0;
-    const AVContentLightMetadata *cll = (const AVContentLightMetadata *)
-        av_stream_get_side_data(st, AV_PKT_DATA_CONTENT_LIGHT_LEVEL, &size);
-    if (cll && size >= (int)sizeof(*cll)) {
+    /* FFmpeg 7：流级 side data 移到 codecpar->coded_side_data（av_stream_get_side_data 已弃用，且 size 参数为 size_t*） */
+    const AVPacketSideData *sd = av_packet_side_data_get(codecpar->coded_side_data, codecpar->nb_coded_side_data,
+                                                         AV_PKT_DATA_CONTENT_LIGHT_LEVEL);
+    const AVContentLightMetadata *cll = sd ? (const AVContentLightMetadata *)sd->data : NULL;
+    if (cll && sd->size >= sizeof(*cll)) {
         if (cll->MaxCLL > 0)
             ijkmeta_set_int64_l(stream_meta, IJKM_KEY_MAX_CLL, cll->MaxCLL);
         if (cll->MaxFALL > 0)
             ijkmeta_set_int64_l(stream_meta, IJKM_KEY_MAX_FALL, cll->MaxFALL);
     }
 
-    size = 0;
-    const AVMasteringDisplayMetadata *mdm = (const AVMasteringDisplayMetadata *)
-        av_stream_get_side_data(st, AV_PKT_DATA_MASTERING_DISPLAY_METADATA, &size);
-    if (mdm && size >= (int)sizeof(*mdm) && mdm->has_luminance) {
+    sd = av_packet_side_data_get(codecpar->coded_side_data, codecpar->nb_coded_side_data,
+                                 AV_PKT_DATA_MASTERING_DISPLAY_METADATA);
+    const AVMasteringDisplayMetadata *mdm = sd ? (const AVMasteringDisplayMetadata *)sd->data : NULL;
+    if (mdm && sd->size >= sizeof(*mdm) && mdm->has_luminance) {
         snprintf(buf, sizeof(buf), "%.4f", av_q2d(mdm->max_luminance));
         ijkmeta_set_string_l(stream_meta, IJKM_KEY_MASTERING_MAX_LUM, buf);
         snprintf(buf, sizeof(buf), "%.4f", av_q2d(mdm->min_luminance));
@@ -364,8 +365,9 @@ void ijkmeta_set_avformat_context_l(IjkMediaMeta *meta, AVFormatContext *ic)
 
                 if (codecpar->sample_rate)
                     ijkmeta_set_int64_l(stream_meta, IJKM_KEY_SAMPLE_RATE, codecpar->sample_rate);
-                if (codecpar->channel_layout)
-                    ijkmeta_set_int64_l(stream_meta, IJKM_KEY_CHANNEL_LAYOUT, codecpar->channel_layout);
+                /* FFmpeg 7：channel_layout 掩码移到 ch_layout；仅 NATIVE 顺序有掩码，Java 层仍按旧掩码解析 */
+                if (codecpar->ch_layout.order == AV_CHANNEL_ORDER_NATIVE && codecpar->ch_layout.u.mask)
+                    ijkmeta_set_int64_l(stream_meta, IJKM_KEY_CHANNEL_LAYOUT, (int64_t)codecpar->ch_layout.u.mask);
                 break;
             }
             case AVMEDIA_TYPE_SUBTITLE: {
