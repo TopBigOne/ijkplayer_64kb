@@ -118,6 +118,11 @@
     <string name="pref_title_misc">Misc</string>
     <string name="pref_key_using_mediadatasource" translatable="false">pref.using_mediadatasource</string>
     <string name="pref_title_using_mediadatasource">Using MediaDataSource</string>
+    <string name="pref_key_third_party_libs" translatable="false">pref.third_party_libs</string>
+    <string name="pref_title_third_party_libs">Third-party libraries</string>
+    <string name="pref_summary_third_party_libs">Libraries used by the project and their versions</string>
+    <string name="third_party_libs_native">Native (linked into libijkplayer.so)</string>
+    <string name="third_party_libs_java">Java / Android</string>
     <string name="pref_summary_using_mediadatasource"></string>
 
     <!-- -->

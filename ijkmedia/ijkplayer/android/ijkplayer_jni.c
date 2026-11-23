@@ -39,6 +39,9 @@
 #include "ijksdl/android/ijksdl_android_jni.h"
 #include "ijksdl/android/ijksdl_codec_android_mediadef.h"
 #include "ijkavformat/ijkavformat.h"
+#include "ijksoundtouch/ijksoundtouch_wrap.h"
+#include "libyuv/version.h"
+#include <openssl/crypto.h>
 
 #define JNI_MODULE_PACKAGE      "tv/danmaku/ijk/media/player"
 #define JNI_CLASS_IJKPLAYER     "tv/danmaku/ijk/media/player/IjkMediaPlayer"
@@ -1108,6 +1111,46 @@ IjkMediaPlayer_native_profileEnd(JNIEnv *env, jclass clazz)
     ALOGD("moncleanup\n");
 }
 
+/* libwebsockets 只在 ijkws.c 中包含其头文件，这里仅声明需要的接口 */
+const char *lws_get_library_version(void);
+
+static void append_lib_version(char *buf, size_t size, const char *name, const char *version)
+{
+    size_t len = strlen(buf);
+    if (len < size)
+        snprintf(buf + len, size - len, "%s\t%s\n", name, version ? version : "?");
+}
+
+static void append_av_version(char *buf, size_t size, const char *name, unsigned version)
+{
+    char ver[32];
+    snprintf(ver, sizeof(ver), "%u.%u.%u", AV_VERSION_MAJOR(version), AV_VERSION_MINOR(version), AV_VERSION_MICRO(version));
+    append_lib_version(buf, size, name, ver);
+}
+
+/* 运行时实际链接进 libijkplayer.so 的第三方库版本，每行 "名称\t版本" */
+static jstring
+IjkMediaPlayer_native_getLibraryVersions(JNIEnv *env, jclass clazz)
+{
+    char buf[1024] = {0};
+    char ver[32];
+
+    append_lib_version(buf, sizeof(buf), "ijkplayer",     ijkmp_version());
+    append_lib_version(buf, sizeof(buf), "FFmpeg",        av_version_info());
+    append_av_version (buf, sizeof(buf), "libavutil",     avutil_version());
+    append_av_version (buf, sizeof(buf), "libavcodec",    avcodec_version());
+    append_av_version (buf, sizeof(buf), "libavformat",   avformat_version());
+    append_av_version (buf, sizeof(buf), "libswscale",    swscale_version());
+    append_av_version (buf, sizeof(buf), "libswresample", swresample_version());
+    append_lib_version(buf, sizeof(buf), "OpenSSL",       OpenSSL_version(OPENSSL_VERSION));
+    append_lib_version(buf, sizeof(buf), "libwebsockets", lws_get_library_version());
+    append_lib_version(buf, sizeof(buf), "SoundTouch",    ijk_soundtouch_get_version_string());
+    snprintf(ver, sizeof(ver), "%d", LIBYUV_VERSION);
+    append_lib_version(buf, sizeof(buf), "libyuv",        ver);
+
+    return (*env)->NewStringUTF(env, buf);
+}
+
 static void
 IjkMediaPlayer_native_setLogLevel(JNIEnv *env, jclass clazz, jint level)
 {
@@ -1187,6 +1230,7 @@ static JNINativeMethod g_methods[] = {
     { "native_profileEnd",      "()V",                      (void *) IjkMediaPlayer_native_profileEnd },
 
     { "native_setLogLevel",     "(I)V",                     (void *) IjkMediaPlayer_native_setLogLevel },
+    { "native_getLibraryVersions", "()Ljava/lang/String;",  (void *) IjkMediaPlayer_native_getLibraryVersions },
     { "_setFrameAtTime",        "(Ljava/lang/String;JJII)V", (void *) IjkMediaPlayer_setFrameAtTime },
 };
 

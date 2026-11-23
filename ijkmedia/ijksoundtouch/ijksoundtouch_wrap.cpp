@@ -28,6 +28,11 @@ using namespace soundtouch;
 extern "C" void* ijk_soundtouch_create();
 extern "C" int ijk_soundtouch_translate(void *handle, short* data, float speed, float pitch, int len, int bytes_per_sample, int n_channel, int n_sampleRate);
 extern "C" void ijk_soundtouch_destroy(void *handle);
+extern "C" const char *ijk_soundtouch_get_version_string();
+
+const char *ijk_soundtouch_get_version_string() {
+    return SoundTouch::getVersionString();
+}
 
 void* ijk_soundtouch_create() {
     SoundTouch *handle_ptr = new SoundTouch();

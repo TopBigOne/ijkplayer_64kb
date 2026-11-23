@@ -137,5 +137,10 @@
             android:persistent="true"
             android:summary="@string/pref_summary_using_mediadatasource"
             android:title="@string/pref_title_using_mediadatasource" />
+        <Preference
+            android:key="@string/pref_key_third_party_libs"
+            android:persistent="false"
+            android:summary="@string/pref_summary_third_party_libs"
+            android:title="@string/pref_title_third_party_libs" />
     </PreferenceCategory>
 </PreferenceScreen>

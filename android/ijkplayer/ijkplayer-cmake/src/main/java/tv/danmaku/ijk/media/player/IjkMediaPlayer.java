@@ -1326,4 +1326,16 @@ public final class IjkMediaPlayer extends AbstractMediaPlayer {
     public static native void native_profileBegin(String libName);
     public static native void native_profileEnd();
     public static native void native_setLogLevel(int level);
+
+    /**
+     * 运行时实际链接进 libijkplayer.so 的第三方库及版本（ijkplayer、FFmpeg 及各子库、OpenSSL、
+     * libwebsockets、SoundTouch、libyuv），每行格式为 "名称\t版本"。
+     */
+    public static String getNativeLibraryVersions() {
+        loadLibrariesOnce(sLocalLibLoader);
+        initNativeOnce();
+        return native_getLibraryVersions();
+    }
+
+    private static native String native_getLibraryVersions();
 }

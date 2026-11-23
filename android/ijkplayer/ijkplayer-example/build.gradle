@@ -1,5 +1,22 @@
 apply plugin: 'com.android.application'
 
+// 第三方 Java 依赖：同时用于声明依赖和生成 BuildConfig.THIRD_PARTY_JAVA_LIBS（设置页「第三方库」展示），版本只维护这一处
+def javaLibs = [
+        'androidx.appcompat:appcompat:1.7.0',
+        'androidx.annotation:annotation:1.8.1',
+        'androidx.drawerlayout:drawerlayout:1.1.1',
+        'androidx.preference:preference:1.1.1',
+        'androidx.cardview:cardview:1.0.0',
+        'androidx.recyclerview:recyclerview:1.2.1',
+        'com.squareup:otto:1.3.8',
+]
+// 字节 CodeLocator（配合 Android Studio 插件抓取界面/定位代码），仅 debug 包引入
+// 注意：lancet 模块需配合 Lancet 编译插件才会织入代码；未接插件时只是引入类，不生效
+def debugJavaLibs = [
+        'com.bytedance.tools.codelocator:codelocator-core:2.0.4',
+        'com.bytedance.tools.codelocator:codelocator-lancet-all:2.0.4',
+]
+
 android {
     compileSdk 35
 
@@ -18,10 +35,17 @@ android {
             abiFilters "arm64-v8a","armeabi-v7a"
         }
     }
+    buildFeatures {
+        buildConfig true
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            buildConfigField "String", "THIRD_PARTY_JAVA_LIBS", "\"${javaLibs.join('\\n')}\""
+        }
+        debug {
+            buildConfigField "String", "THIRD_PARTY_JAVA_LIBS", "\"${(javaLibs + debugJavaLibs).join('\\n')}\""
         }
     }
     namespace 'tv.danmaku.ijk.media.example'
@@ -32,17 +56,7 @@ android {
 
 dependencies {
 //    implementation fileTree(include: ['*.jar'], dir: 'libs')
-    implementation 'androidx.appcompat:appcompat:1.7.0'
-    implementation 'androidx.annotation:annotation:1.8.1'
-    implementation 'androidx.drawerlayout:drawerlayout:1.1.1'
-    implementation 'androidx.preference:preference:1.1.1'
-    implementation 'androidx.cardview:cardview:1.0.0'
-    implementation 'androidx.recyclerview:recyclerview:1.2.1'
-    implementation 'com.squareup:otto:1.3.8'
+    javaLibs.each { implementation it }
     implementation project(':ijkplayer-cmake')
-
-    // 字节 CodeLocator（配合 Android Studio 插件抓取界面/定位代码），仅 debug 包引入
-    debugImplementation "com.bytedance.tools.codelocator:codelocator-core:2.0.4"
-    // 注意：lancet 模块需配合 Lancet 编译插件才会织入代码；未接插件时只是引入类，不生效
-    debugImplementation "com.bytedance.tools.codelocator:codelocator-lancet-all:2.0.4"
+    debugJavaLibs.each { debugImplementation it }
 }

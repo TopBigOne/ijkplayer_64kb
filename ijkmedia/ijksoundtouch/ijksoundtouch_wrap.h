@@ -27,5 +27,6 @@
 void* ijk_soundtouch_create();
 int ijk_soundtouch_translate(void *handle, short* data, float speed, float pitch, int len, int bytes_per_sample, int n_channel, int n_sampleRate);
 void ijk_soundtouch_destroy(void *handle);
+const char *ijk_soundtouch_get_version_string();
 
 #endif /* IJKSOUNDTOUCHWRAP_H */
